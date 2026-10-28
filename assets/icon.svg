@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Twill">
+  <title>Twill</title>
+  <desc>Three diagonal commit lanes woven over a faint twill texture.</desc>
+
+  <defs>
+    <!-- Deep ink ground, a hair lighter at the top so the tile has depth. -->
+    <linearGradient id="ground" x1="0" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#1c2946"/>
+      <stop offset="0.55" stop-color="#121a2e"/>
+      <stop offset="1" stop-color="#0b1120"/>
+    </linearGradient>
+
+    <!-- Soft light from the top-left corner. -->
+    <radialGradient id="glow" cx="0.18" cy="0.12" r="0.9">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.14"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0.03"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Twill: two diagonal thread sets that barely show, like cloth up close. -->
+    <pattern id="weave-a" width="64" height="64" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <line x1="0" y1="0" x2="0" y2="64" stroke="#ffffff" stroke-opacity="0.05" stroke-width="2"/>
+    </pattern>
+    <pattern id="weave-b" width="64" height="64" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)">
+      <line x1="0" y1="0" x2="0" y2="64" stroke="#ffffff" stroke-opacity="0.03" stroke-width="2"/>
+    </pattern>
+
+    <clipPath id="squircle">
+      <rect x="48" y="48" width="928" height="928" rx="210"/>
+    </clipPath>
+
+    <filter id="drop" x="-10%" y="-10%" width="120%" height="124%">
+      <feDropShadow dx="0" dy="16" stdDeviation="22" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- Ground -->
+  <rect x="48" y="48" width="928" height="928" rx="210" fill="url(#ground)" filter="url(#drop)"/>
+  <g clip-path="url(#squircle)">
+    <rect x="48" y="48" width="928" height="928" fill="url(#glow)"/>
+    <rect x="48" y="48" width="928" height="928" fill="url(#weave-a)"/>
+    <rect x="48" y="48" width="928" height="928" fill="url(#weave-b)"/>
+
+    <!-- Three lanes climbing at 45°, the twill ridges of a commit graph.
+         Ends stay clear of the tile edge so the round caps stay round. -->
+    <g fill="none" stroke-linecap="round" stroke-width="50">
+      <path d="M180 670 L700 150" stroke="#5b8cff"/>
+      <path d="M270 790 L810 250" stroke="#a78bfa"/>
+      <path d="M360 910 L920 350" stroke="#f5b544"/>
+    </g>
+
+    <!-- Merge edges: two branches joining a lane at the same commit row.
+         Each edge takes the color of the lane it joins, so the paths read as
+         one graph rather than as rungs of a ladder. -->
+    <g fill="none" stroke-linecap="round" stroke-width="24">
+      <path d="M520 330 L625 435" stroke="#a78bfa"/>
+      <path d="M375 685 L480 790" stroke="#f5b544"/>
+    </g>
+
+    <!-- Commit nodes, staggered so the three lanes read as separate threads. -->
+    <g fill="#f8fafc" stroke="#0d1424" stroke-width="9">
+      <circle cx="270" cy="580" r="21"/>
+      <circle cx="520" cy="330" r="21"/>
+      <circle cx="375" cy="685" r="21"/>
+      <circle cx="625" cy="435" r="21"/>
+      <circle cx="480" cy="790" r="21"/>
+      <circle cx="800" cy="470" r="21"/>
+    </g>
+  </g>
+
+  <!-- Inner rim keeps the tile crisp against a light desktop. -->
+  <rect x="48" y="48" width="928" height="928" rx="210" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="2"/>
+</svg>
