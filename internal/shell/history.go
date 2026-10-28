@@ -1,12 +1,47 @@
 package shell
 
 import (
+	"hash/fnv"
 	"strconv"
+	"strings"
+	"time"
+	"unicode"
 
 	"github.com/egoist/mygo/ui"
 
 	"twill/internal/gitx"
 )
+
+// The commit row's columns, left to right: avatar, author, time, lane graph,
+// expander, message and ref chips. The fixed widths keep the graph and the
+// messages at one x down the list, as IDEA's log does.
+const (
+	// historyAvatarSize is the diameter of the author's avatar disc.
+	historyAvatarSize float32 = 20
+	// historyAuthorWidth and historyTimeWidth are the author and time columns.
+	historyAuthorWidth float32 = 84
+	historyTimeWidth   float32 = 58
+	// historyChevronWidth fixes the expand marker so the message column has
+	// the same left edge on every row.
+	historyChevronWidth float32 = 8
+	// historyRowGap is the space between two columns.
+	historyRowGap float32 = 6
+	// historyRowPad is the space the row leaves on each side.
+	historyRowPad float32 = 6
+)
+
+// avatarColors are the disc colors an author's initial sits on. They are dark
+// enough for white text in both themes.
+var avatarColors = []ui.Color{
+	ui.Hex("#4f8cff"),
+	ui.Hex("#8b5cf6"),
+	ui.Hex("#0ea5e9"),
+	ui.Hex("#0d9488"),
+	ui.Hex("#d97706"),
+	ui.Hex("#e11d48"),
+	ui.Hex("#db2777"),
+	ui.Hex("#64748b"),
+}
 
 // historyRow is one line of the history list: a commit, a file under an
 // expanded commit, or the "load older" footer.
@@ -37,7 +72,9 @@ func (a *App) historyView(c *ui.Context, p palette) {
 	}
 
 	rows := a.historyRows()
-	indent := float32(a.graphLanes)*graphLaneWidth + 8
+	// A commit's files and notes line up with its message column, so they read
+	// as its children.
+	indent := a.historyMessageX()
 	ui.List(c, &a.historyList, len(rows), func(i int) {
 		r := rows[i]
 		switch {
@@ -54,7 +91,7 @@ func (a *App) historyView(c *ui.Context, p palette) {
 		case r.file != nil:
 			a.commitFileRow(c, p, *r.file, indent)
 		case r.commit != nil:
-			a.commitRow(c, p, *r.commit, r, indent)
+			a.commitRow(c, p, *r.commit, r)
 		}
 	}).ItemKey(func(i int) any {
 		if i < len(rows) {
@@ -96,47 +133,84 @@ func (a *App) historyRows() []historyRow {
 	return rows
 }
 
-// commitRow draws the lane graph and one commit. The graph is a plain
-// box with a painter: lines and a round node, as the web view drew it.
-func (a *App) commitRow(c *ui.Context, p palette, commit gitx.Commit, r historyRow, indent float32) {
+// commitRow draws one commit as a single line of columns: the author's avatar,
+// the author, the commit time, the lane graph, the expander, the message and
+// the ref chips on the right. The graph is a plain box with a painter: lines
+// and a round node, as the web view drew it.
+func (a *App) commitRow(c *ui.Context, p palette, commit gitx.Commit, r historyRow) {
 	t := c.Theme()
 	expanded := a.expanded != nil && a.expanded.OID == commit.OID
-	row := ui.Row(c).FillWidth().Height(graphRowHeight).Gap(2).PaddingEnd(8).Clip().
-		Cursor(ui.CursorPointer)
+	row := ui.Row(c).FillWidth().Height(graphRowHeight).PaddingX(historyRowPad).
+		Gap(historyRowGap).Clip().Cursor(ui.CursorPointer)
 	bg := t.Surface
 	if expanded {
 		bg = t.Background
 		row.Background(bg)
 	}
-	row.Tooltip(commit.Subject)
+	subject := commit.Subject
+	if subject == "" {
+		subject = "(no message)"
+	}
+	// The row is one line, so the hash and the full time live in tooltips.
+	row.Tooltip(commit.Short + " " + subject)
 	row.OnClick(func() { a.selectCommit(commit) })
 	row.Children(func() {
+		a.commitAvatar(c, commit.Author)
+		author := commit.Author
+		if author == "" {
+			author = "unknown"
+		}
+		ui.Text(c, author).FontSize(10).TextColor(t.TextMuted).
+			Width(historyAuthorWidth).SingleLine().Tooltip(commit.Author)
+		ui.Text(c, relativeTime(commit.Time)).FontSize(10).TextColor(t.TextMuted).
+			Width(historyTimeWidth).SingleLine().
+			Tooltip(time.Unix(commit.Time, 0).Format("2006-01-02 15:04"))
 		var g graphRow
 		if r.index >= 0 && r.index < len(a.graph) {
 			g = a.graph[r.index]
 		}
 		a.drawGraph(c, a.graphLanes, g, bg)
-		ui.Column(c).Grow(1).Gap(2).ClipX().Children(func() {
-			ui.Row(c).FillWidth().Gap(4).Children(func() {
-				chevron := "▸"
-				if expanded {
-					chevron = "▾"
-				}
-				ui.Text(c, chevron).FontSize(9).TextColor(t.TextMuted)
-				subject := commit.Subject
-				if subject == "" {
-					subject = "(no message)"
-				}
-				ui.Text(c, subject).FontSize(12).Grow(1).SingleLine()
-				a.commitRefs(c, p, commit.Refs)
-			})
-			ui.Row(c).FillWidth().Gap(8).PaddingStart(12).Children(func() {
-				ui.Text(c, commit.Short).Font(mono()).FontSize(10).TextColor(t.TextMuted).SingleLine()
-				ui.Text(c, commit.Author).FontSize(10).TextColor(t.TextMuted).Grow(1).SingleLine()
-				ui.Text(c, relativeTime(commit.Time)).FontSize(10).TextColor(t.TextMuted).SingleLine()
-			})
-		})
+		chevron := "▸"
+		if expanded {
+			chevron = "▾"
+		}
+		ui.Text(c, chevron).FontSize(9).TextColor(t.TextMuted).Width(historyChevronWidth)
+		ui.Text(c, subject).FontSize(12).Grow(1).SingleLine()
+		a.commitRefs(c, p, commit.Refs)
 	})
+}
+
+// historyMessageX is where a commit's message starts: past the row padding,
+// the avatar, the author and time columns, the lane graph and the expander,
+// with one gap between each of those six parts. File rows use it as their
+// indent so they sit under their commit's message.
+func (a *App) historyMessageX() float32 {
+	graph := float32(a.graphLanes)*graphLaneWidth + graphLaneWidth
+	return historyRowPad + historyAvatarSize + historyAuthorWidth + historyTimeWidth +
+		historyChevronWidth + graph + 5*historyRowGap
+}
+
+// commitAvatar draws the author's initials on a colored disc. The color comes
+// from the name, so one person keeps one color down the list and across
+// sessions. It is decoration, not identity: no image is fetched and the name
+// is never sent anywhere.
+func (a *App) commitAvatar(c *ui.Context, author string) {
+	initial := "?"
+	if name := strings.TrimSpace(author); name != "" {
+		initial = string(unicode.ToUpper([]rune(name)[0]))
+	}
+	disc := ui.Box(c).Width(historyAvatarSize).Height(historyAvatarSize).
+		Radius(historyAvatarSize / 2).Background(avatarColor(author)).Shrink(0).Center()
+	disc.Children(func() {
+		ui.Text(c, initial).FontSize(9).Bold().TextColor(ui.Hex("#ffffff"))
+	})
+}
+
+// avatarColor picks an author's disc color from a hash of the name.
+func avatarColor(author string) ui.Color {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(strings.TrimSpace(author)))
+	return avatarColors[h.Sum32()%uint32(len(avatarColors))]
 }
 
 // commitRefs shows at most two branch or tag chips, then a count.

@@ -2,6 +2,7 @@ package shell
 
 import (
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -175,6 +176,67 @@ func TestLayoutGraph(t *testing.T) {
 	// The side branch ends at root; both a and b point at it.
 	if rows[3].Lane != 0 {
 		t.Fatalf("root lane = %d", rows[3].Lane)
+	}
+}
+
+// historyTestApp returns a shell showing one tagged commit.
+func historyTestApp() *App {
+	app := New(&service.RepoService{}, nil)
+	app.status = gitx.NewStatus("/tmp/demo")
+	app.view = ViewHistory
+	app.commitsLoaded = true
+	app.commits = []gitx.Commit{{
+		OID:     "abc1234567",
+		Short:   "abc1234",
+		Subject: "Add avatars",
+		Author:  "ada",
+		Time:    time.Now().Add(-2 * time.Hour).Unix(),
+		Refs:    []gitx.Ref{{Name: "v1.0", Kind: "tag"}},
+	}}
+	app.graph, app.graphLanes = layoutGraph(app.commits)
+	return app
+}
+
+func TestHistoryRowShowsColumns(t *testing.T) {
+	app := historyTestApp()
+	tt := ui.NewTester(app.View, 1100, 720)
+
+	// One row carries the avatar initial, the author, the time, the message and
+	// the tag chip, in that order from left to right.
+	want := []string{"A", "ada", "2h ago", "Add avatars", "v1.0"}
+	rects := make([]ui.Rect, len(want))
+	for i, text := range want {
+		r, ok := tt.Find(text)
+		if !ok {
+			t.Fatalf("missing %q in %q", text, tt.Texts())
+		}
+		rects[i] = r
+	}
+	for i := 1; i < len(rects); i++ {
+		if rects[i].X <= rects[i-1].X {
+			t.Fatalf("%q is not right of %q: %+v", want[i], want[i-1], rects)
+		}
+	}
+}
+
+func TestHistoryFilesIndentUnderMessage(t *testing.T) {
+	app := historyTestApp()
+	app.expanded = &app.commits[0]
+	app.commitFiles = []gitx.FileEntry{{Path: "src/main.go", Status: "M"}}
+	tt := ui.NewTester(app.View, 1100, 720)
+
+	subject, ok := tt.Find("Add avatars")
+	if !ok {
+		t.Fatalf("texts = %q", tt.Texts())
+	}
+	file, ok := tt.Find("src/main.go")
+	if !ok {
+		t.Fatalf("texts = %q", tt.Texts())
+	}
+	// The file row is indented to the message column, then past its status
+	// letter, so it starts right of the message.
+	if file.X <= subject.X {
+		t.Fatalf("file starts at %v, subject at %v", file.X, subject.X)
 	}
 }
 

@@ -99,7 +99,9 @@ Checked in the packaged app against a demo repository:
   via Cmd+Enter inside the message field;
 - Unified/Split diff layouts, Side by side/Stacked panes, and expanding a
   worktree gap (a commit gap is covered by `gitx` and row-builder tests);
-- history expand, file list, per-file patch, lane graph and ref chips;
+- history columns (avatar, author, time, lane graph, message, chips) checked
+  in the packaged app; the expanded commit's file list and its indent under
+  the message are covered by `internal/shell` tests;
 - branch list, checkout by row click, create from the inline field, delete
   with the confirmation dialog;
 - screen refresh after an external file edit (watcher), startup restore;

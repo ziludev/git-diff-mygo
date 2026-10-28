@@ -14,9 +14,11 @@ this app now does the same.
 The left sidebar gets two tabs: **Changes** (the existing panel, unchanged)
 and **History**.
 
-- History lists the commits of every ref (`--all`), newest first: subject,
-  short object id, author name and a relative time. 100 commits per page with
-  a "Load older commits" button.
+- History lists the commits of every ref (`--all`), newest first. A commit is
+  one line of fixed columns, left to right: the author's avatar, the author,
+  the relative commit time, the lane graph, an expander, the message and its
+  ref chips on the right. 100 commits per page with a "Load older commits"
+  button.
 - Each row carries up to two branch/tag chips (tags in amber, branches muted)
   plus a `+N` count for the rest, so a tag or a side branch is visible without
   opening the commit.
@@ -31,6 +33,20 @@ and **History**.
   expects from a linear log.
 - The tab remembers no state across repositories: opening another repository
   clears the loaded pages.
+
+### Commit columns
+
+- The avatar is a colored disc with the author's initial (or `?`). Its color is
+  a hash of the name, so one person keeps one color across sessions. No image
+  is fetched and no name or address leaves the machine.
+- The author and time columns have fixed widths so the graph and the messages
+  line up down the list. A long name truncates; the tooltips carry the full
+  name, the exact time and the short object id.
+- The files of an expanded commit are indented to the message column, so they
+  read as its children.
+- The author column shows git's author (`%an`), the person who wrote the
+  change. A rebase, amend or cherry-pick can make the committer differ; git's
+  own default log shows the author too.
 
 ### Commit graph
 
@@ -51,9 +67,10 @@ Every row draws a colored lane column whose layout comes from `layoutGraph`
   object id. Local branches sort before remote-tracking branches, then tags;
   `origin/HEAD` is dropped. A failed ref listing only drops the labels, never
   the list.
-- Rows are a fixed 48 px tall so consecutive rows line up; all rows share the
-  widest lane count so subjects start at one x. The layout is a pure function
-  of the loaded commits, so appending a page recomputes it in one pass.
+- Rows are a fixed 30 px tall so consecutive rows line up; all rows share the
+  widest lane count so the graph and the messages start at one x. The layout is
+  a pure function of the loaded commits, so appending a page recomputes it in
+  one pass.
 - `drawGraph` strokes segments 2 px wide and overlaps each end by half a pixel
   so two rows' antialiased edges leave no seam. A merge edge is a cubic
   S-curve: it leaves the node vertically and arrives in the parent lane

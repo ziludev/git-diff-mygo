@@ -9,8 +9,9 @@ import (
 const (
 	// graphLaneWidth is the distance between two lanes, in DIPs.
 	graphLaneWidth float32 = 14
-	// graphRowHeight is the height of one commit row; the graph fills it.
-	graphRowHeight float32 = 48
+	// graphRowHeight is the height of one commit row; the graph fills it. The
+	// row is a single line of columns, so this is a text line plus padding.
+	graphRowHeight float32 = 30
 )
 
 // graphColors are lane colors, cycled by lane index.
