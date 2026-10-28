@@ -103,8 +103,10 @@ func (a *App) commitRow(c *ui.Context, p palette, commit gitx.Commit, r historyR
 	expanded := a.expanded != nil && a.expanded.OID == commit.OID
 	row := ui.Row(c).FillWidth().Height(graphRowHeight).Gap(2).PaddingEnd(8).Clip().
 		Cursor(ui.CursorPointer)
+	bg := t.Surface
 	if expanded {
-		row.Background(t.Background)
+		bg = t.Background
+		row.Background(bg)
 	}
 	row.Tooltip(commit.Subject)
 	row.OnClick(func() { a.selectCommit(commit) })
@@ -113,7 +115,7 @@ func (a *App) commitRow(c *ui.Context, p palette, commit gitx.Commit, r historyR
 		if r.index >= 0 && r.index < len(a.graph) {
 			g = a.graph[r.index]
 		}
-		a.drawGraph(c, a.graphLanes, g)
+		a.drawGraph(c, a.graphLanes, g, bg)
 		ui.Column(c).Grow(1).Gap(2).ClipX().Children(func() {
 			ui.Row(c).FillWidth().Gap(4).Children(func() {
 				chevron := "▸"
@@ -193,31 +195,44 @@ func (a *App) commitFileRow(c *ui.Context, p palette, file gitx.FileEntry, inden
 	})
 }
 
-func (a *App) drawGraph(c *ui.Context, lanes int, g graphRow) {
-	width := float32(lanes)*graphLaneWidth + 14
+// drawGraph paints one row's lanes. Segments and elbows meet at the row
+// boundary, so a lane stays one continuous line down the list; an elbow leaves
+// its commit's lane vertically and arrives vertically in the parent's lane,
+// like IDEA's log, rather than cutting across the row at an angle. bg is the
+// row background under the graph, used to punch a halo around the node so
+// crossing lanes do not run through it.
+func (a *App) drawGraph(c *ui.Context, lanes int, g graphRow, bg ui.Color) {
+	width := float32(lanes)*graphLaneWidth + graphLaneWidth
 	ui.Box(c).Width(width).Height(graphRowHeight).Shrink(0).
 		Draw(func(pt *ui.Painter, r ui.Rect) {
 			laneX := func(lane int) float32 {
-				return r.X + 10 + float32(lane)*graphLaneWidth
+				return r.X + graphLaneWidth/2 + float32(lane)*graphLaneWidth
 			}
 			top, mid, bottom := r.Y, r.Y+r.H/2, r.Y+r.H
 			for _, seg := range g.Segments {
 				color := graphColors[seg.Color%len(graphColors)]
-				pt.Line(laneX(seg.Lane), top+seg.From*r.H, laneX(seg.Lane),
-					top+seg.To*r.H, 1.5, color)
+				// Half a pixel past each end hides the seam between two rows
+				// that antialias their meeting edges separately.
+				pt.Line(laneX(seg.Lane), top+seg.From*r.H-0.5, laneX(seg.Lane),
+					top+seg.To*r.H+0.5, 2, color)
 			}
 			for _, edge := range g.Edges {
 				color := graphColors[edge.Color%len(graphColors)]
-				if edge.To == edge.From {
-					pt.Line(laneX(edge.From), mid, laneX(edge.To), bottom, 1.5, color)
-				} else {
-					pt.Line(laneX(edge.From), mid, laneX(edge.To), mid+r.H*0.3, 1.5, color)
-					pt.Line(laneX(edge.To), mid+r.H*0.3, laneX(edge.To), bottom, 1.5, color)
+				if edge.From == edge.To {
+					pt.Line(laneX(edge.From), mid, laneX(edge.To), bottom, 2, color)
+					continue
 				}
+				drop := bottom - mid
+				path := (&ui.Path{}).MoveTo(laneX(edge.From), mid).
+					CubeTo(laneX(edge.From), mid+drop*0.55,
+						laneX(edge.To), bottom-drop*0.55,
+						laneX(edge.To), bottom)
+				pt.StrokePath(path, 2, color)
 			}
 			if lanes > g.Lane {
 				color := graphColors[g.Color%len(graphColors)]
 				x := laneX(g.Lane)
+				pt.Fill(ui.Rect{X: x - 5, Y: mid - 5, W: 10, H: 10}, bg, 5)
 				pt.Fill(ui.Rect{X: x - 4, Y: mid - 4, W: 8, H: 8}, color, 4)
 			}
 		})

@@ -54,6 +54,12 @@ Every row draws a colored lane column whose layout comes from `layoutGraph`
 - Rows are a fixed 48 px tall so consecutive rows line up; all rows share the
   widest lane count so subjects start at one x. The layout is a pure function
   of the loaded commits, so appending a page recomputes it in one pass.
+- `drawGraph` strokes segments 2 px wide and overlaps each end by half a pixel
+  so two rows' antialiased edges leave no seam. A merge edge is a cubic
+  S-curve: it leaves the node vertically and arrives in the parent lane
+  vertically, like IDEA's log, instead of cutting diagonally across the row.
+  The node is drawn over a halo in the row's own background color, so lanes
+  crossing that row stop at the halo rather than touching the circle.
 
 ## Data flow
 
