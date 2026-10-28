@@ -1,14 +1,15 @@
 import { useMemo, useState } from "react";
-import { FileQuestion, FolderOpen, Minus, Plus, Search, Undo2 } from "lucide-react";
+import { FileQuestion, FolderOpen, Minus, Plus, Undo2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CommitPanel } from "@/components/commit-panel";
-import { Input } from "@/components/ui/input";
+import { FilterInput } from "@/components/filter-input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { EmptyState } from "@/components/empty-state";
+import { SelectableRow } from "@/components/selectable-row";
 import { confirmAction } from "@/lib/confirm";
-import { cn } from "@/lib/utils";
+import { cn, toneFor } from "@/lib/utils";
 import type { Change } from "@/mygo";
 import { sameChange, useRepo } from "@/store/repo";
 
@@ -22,22 +23,6 @@ function letterFor(change: Change): string {
   const code = change.staged ? change.x : change.y;
   if (!code || code === ".") return "?";
   return code;
-}
-
-function toneFor(code: string): string {
-  switch (code) {
-    case "A":
-      return "text-emerald-600 dark:text-emerald-400";
-    case "M":
-      return "text-amber-600 dark:text-amber-400";
-    case "D":
-      return "text-red-600 dark:text-red-400";
-    case "R":
-    case "C":
-      return "text-sky-600 dark:text-sky-400";
-    default:
-      return "text-muted-foreground";
-  }
 }
 
 export function ChangesPanel() {
@@ -82,15 +67,7 @@ export function ChangesPanel() {
   return (
     <div className="flex h-full min-h-0 flex-col bg-sidebar">
       <div className="shrink-0 border-b p-2">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Filter files"
-            className="h-7 pl-7 text-xs"
-          />
-        </div>
+        <FilterInput value={query} onChange={setQuery} placeholder="Filter files" />
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
@@ -120,23 +97,11 @@ export function ChangesPanel() {
                   const canDiscard =
                     !change.staged && !change.untracked && !change.conflicted;
                   return (
-                    <div
+                    <SelectableRow
                       key={`${section.key}:${change.path}`}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => void select(change)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          void select(change);
-                        }
-                      }}
-                      className={cn(
-                        "group flex h-7 cursor-default items-center gap-2 px-2 text-xs outline-none",
-                        active
-                          ? "bg-accent text-accent-foreground"
-                          : "hover:bg-accent/50 focus-visible:bg-accent/50",
-                      )}
+                      active={active}
+                      onSelect={() => void select(change)}
+                      className="group flex h-7 items-center gap-2 px-2 text-xs"
                     >
                       <span
                         className={cn(
@@ -211,7 +176,7 @@ export function ChangesPanel() {
                           </Button>
                         ) : null}
                       </div>
-                    </div>
+                    </SelectableRow>
                   );
                 })}
               </div>

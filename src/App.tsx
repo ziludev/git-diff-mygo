@@ -1,8 +1,8 @@
 import { Group, Panel, Separator } from "react-resizable-panels";
 
-import { ChangesPanel } from "@/components/changes-panel";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DiffPanel } from "@/components/diff-panel";
+import { RepoPanel } from "@/components/repo-panel";
 import { Toaster } from "@/components/ui/sonner";
 import { Toolbar } from "@/components/toolbar";
 import { useThemeType } from "@/hooks/use-theme";
@@ -17,7 +17,7 @@ export function App() {
       <Toolbar />
       <Group orientation="horizontal" className="min-h-0 flex-1">
         <Panel defaultSize="26" minSize="18" maxSize="44" className="min-h-0">
-          <ChangesPanel />
+          <RepoPanel />
         </Panel>
         <Separator className="w-px bg-border transition-colors data-[separator=active]:bg-ring" />
         <Panel className="min-h-0">

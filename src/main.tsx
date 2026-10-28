@@ -7,8 +7,9 @@ import { useRepo } from "./store/repo";
 import "./style.css";
 
 // The Go side emits this after a menu action, a write, or a watcher event.
-events.repoChanged.on(() => {
-  void useRepo.getState().refresh();
+// The reason lets the store skip reloading history for worktree churn.
+events.repoChanged.on((change) => {
+  void useRepo.getState().refresh(change.reason);
 });
 
 // The window may already have a repository open: the Go side can open one

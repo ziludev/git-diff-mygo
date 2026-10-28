@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { confirmAction } from "@/lib/confirm";
+import { addedTone, deletedTone } from "@/lib/utils";
 import type { ThemeType } from "@/hooks/use-theme";
 import { useRepo } from "@/store/repo";
 
@@ -23,15 +24,60 @@ type Layout = "split" | "unified";
 
 export function DiffPanel({ theme }: { theme: ThemeType }) {
   const hasRepo = useRepo((s) => Boolean(s.status?.root));
-  const selection = useRepo((s) => s.selection);
-  const diff = useRepo((s) => s.diff);
-  const loading = useRepo((s) => s.loadingDiff);
-  const error = useRepo((s) => s.error);
+  const history = useRepo((s) => s.view === "history");
+  const worktreeSelection = useRepo((s) => s.selection);
+  const worktreeDiff = useRepo((s) => s.diff);
+  const loadingWorktreeDiff = useRepo((s) => s.loadingDiff);
+  const worktreeError = useRepo((s) => s.error);
+  const commit = useRepo((s) => s.expandedCommit);
+  const commitFile = useRepo((s) => s.commitFile);
+  const commitDiff = useRepo((s) => s.commitDiff);
+  const loadingCommitDiff = useRepo((s) => s.loadingCommitDiff);
+  const loadingCommitFiles = useRepo((s) => s.loadingCommitFiles);
+  const commitError = useRepo((s) => s.commitError);
   const clearError = useRepo((s) => s.clearError);
   const applyHunks = useRepo((s) => s.applyHunks);
   const writing = useRepo((s) => s.writing);
   const [layout, setLayout] = useState<Layout>("split");
 
+  // The panel renders one of two sources: the worktree row or a file inside a
+  // commit. History diffs are read-only, so no hunk actions attach to them.
+  const target = history
+    ? {
+        path: commitFile?.path,
+        origPath: commitFile?.origPath,
+        diff: commitDiff,
+        loading: loadingCommitDiff,
+        error: commitError,
+        editable: false,
+        errorTitle: "Could not load the commit",
+        placeholder: !commit
+          ? "Select a commit to see its files."
+          : !commitFile && !loadingCommitFiles
+            ? "This commit changed no files."
+            : null,
+      }
+    : {
+        path: worktreeSelection?.path,
+        origPath: worktreeSelection?.origPath,
+        diff: worktreeDiff,
+        loading: loadingWorktreeDiff,
+        error: worktreeError,
+        // Conflicts, untracked files and renames cannot take a partial apply:
+        // git needs a whole-file operation for those.
+        editable: Boolean(
+          worktreeSelection &&
+            !worktreeSelection.untracked &&
+            !worktreeSelection.conflicted &&
+            !worktreeSelection.origPath,
+        ),
+        errorTitle: worktreeSelection
+          ? "Could not load the diff"
+          : "Could not load the repository",
+        placeholder: worktreeSelection ? null : "Select a file to see its diff.",
+      };
+  const { diff, loading, error, path, origPath } = target;
+  
   // One parse of the patch feeds both the stats and the hunk annotations.
   // The viewer parses the same patch, so anchors and hunk order agree.
   const fileDiff = useMemo(() => {
@@ -53,11 +99,10 @@ export function DiffPanel({ theme }: { theme: ThemeType }) {
     return { added, deleted };
   }, [fileDiff]);
 
-  // Conflicts, untracked files, and renames cannot take a partial apply: git
-  // needs a whole-file operation for those.
-  const canApplyHunks = Boolean(
-    selection && !selection.untracked && !selection.conflicted && !selection.origPath,
-  );
+  // Unlike the viewer's parse, this survives a patch the viewer rejects: a
+  // rename or mode change has a header but no hunk to render.
+  const hasHunks = useMemo(() => Boolean(diff?.patch.includes("@@ ")), [diff?.patch]);
+  const canApplyHunks = target.editable;
 
   const annotations = useMemo<DiffLineAnnotation<number>[]>(() => {
     if (!canApplyHunks || !fileDiff) return [];
@@ -96,7 +141,7 @@ export function DiffPanel({ theme }: { theme: ThemeType }) {
             Hunk {hunk + 1}
           </span>
           <div className="ml-auto flex items-center gap-1">
-            {selection?.staged ? (
+            {worktreeSelection?.staged ? (
               <Button
                 size="xs"
                 variant="ghost"
@@ -124,7 +169,7 @@ export function DiffPanel({ theme }: { theme: ThemeType }) {
                   disabled={writing}
                   onClick={() => {
                     void confirmAction({
-                      title: `Discard hunk ${hunk + 1} of ${selection?.path}?`,
+                      title: `Discard hunk ${hunk + 1} of ${worktreeSelection?.path}?`,
                       description:
                         "This cannot be undone. Only this hunk is reverted.",
                       confirmLabel: "Discard",
@@ -142,7 +187,7 @@ export function DiffPanel({ theme }: { theme: ThemeType }) {
         </div>
       );
     },
-    [applyHunks, selection, writing],
+    [applyHunks, worktreeSelection, writing],
   );
 
   if (!hasRepo) {
@@ -154,13 +199,13 @@ export function DiffPanel({ theme }: { theme: ThemeType }) {
       <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
         <div className="flex min-w-0 items-center gap-1.5 text-xs">
           <span className="truncate font-mono font-medium">
-            {selection?.path ?? "No file selected"}
+            {path ?? "No file selected"}
           </span>
-          {selection?.origPath ? (
+          {origPath ? (
             <>
               <span className="text-muted-foreground">←</span>
               <span className="truncate font-mono text-muted-foreground">
-                {selection.origPath}
+                {origPath}
               </span>
             </>
           ) : null}
@@ -168,25 +213,35 @@ export function DiffPanel({ theme }: { theme: ThemeType }) {
 
         {diff ? (
           <div className="flex items-center gap-1.5 font-mono text-[10px]">
-            <span className="text-emerald-600 dark:text-emerald-400">
-              +{stats.added}
-            </span>
-            <span className="text-red-600 dark:text-red-400">
-              −{stats.deleted}
-            </span>
+            <span className={addedTone}>+{stats.added}</span>
+            <span className={deletedTone}>−{stats.deleted}</span>
           </div>
         ) : null}
 
         <div className="ml-auto flex items-center gap-1">
-          {selection?.conflicted ? (
+          {history ? (
+            commit ? (
+              <>
+                <Badge variant="outline" className="font-mono font-normal">
+                  {commit.short}
+                </Badge>
+                <span
+                  className="max-w-44 truncate text-[11px] text-muted-foreground"
+                  title={commit.subject}
+                >
+                  {commit.subject}
+                </span>
+              </>
+            ) : null
+          ) : worktreeSelection?.conflicted ? (
             <Badge variant="destructive" className="font-normal">
               Conflict
             </Badge>
-          ) : selection?.staged ? (
+          ) : worktreeSelection?.staged ? (
             <Badge variant="outline" className="font-normal">
               Staged
             </Badge>
-          ) : selection?.untracked ? (
+          ) : worktreeSelection?.untracked ? (
             <Badge variant="outline" className="font-normal">
               Untracked
             </Badge>
@@ -222,9 +277,7 @@ export function DiffPanel({ theme }: { theme: ThemeType }) {
         {error ? (
           <EmptyState
             icon={AlertTriangle}
-            title={
-              selection ? "Could not load the diff" : "Could not load the repository"
-            }
+            title={target.errorTitle}
             detail={error}
             action={
               <Button variant="outline" size="sm" onClick={clearError}>
@@ -232,14 +285,18 @@ export function DiffPanel({ theme }: { theme: ThemeType }) {
               </Button>
             }
           />
-        ) : !selection ? (
-          <EmptyState title="Select a file to see its diff." />
-        ) : loading || !diff ? (
+        ) : target.placeholder ? (
+          <EmptyState title={target.placeholder} />
+        ) : loading ? (
           <div className="space-y-2 p-4">
             <Skeleton className="h-4 w-2/3" />
             <Skeleton className="h-4 w-5/6" />
             <Skeleton className="h-4 w-3/4" />
           </div>
+        ) : !diff ? (
+          // A dismissed error leaves the row selected but no patch; a skeleton
+          // here would never end.
+          <EmptyState title="No diff to show" detail="Select the file again to retry." />
         ) : diff.tooLarge ? (
           <EmptyState
             icon={FileWarning}
@@ -252,11 +309,17 @@ export function DiffPanel({ theme }: { theme: ThemeType }) {
             title="Binary file"
             detail="Binary changes are not rendered yet."
           />
-        ) : !diff.patch.trim() ? (
+        ) : !diff.patch.trim() || !hasHunks ? (
+          // A pure rename or mode change has a patch header but no hunks, and
+          // the viewer would render an empty body for it.
           <EmptyState
             icon={FileWarning}
             title="No textual changes"
-            detail="The file has no line changes."
+            detail={
+              origPath
+                ? "The file was renamed or moved without content changes."
+                : "The file has no line changes."
+            }
           />
         ) : (
           <PatchDiff<number>

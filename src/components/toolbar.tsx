@@ -10,6 +10,7 @@ export function Toolbar() {
   const loading = useRepo((s) => s.loadingStatus);
   const open = useRepo((s) => s.open);
   const refresh = useRepo((s) => s.refresh);
+  const setView = useRepo((s) => s.setView);
   const branch = status
     ? status.branch.head ||
       (status.branch.detached ? "detached HEAD" : "unknown branch")
@@ -36,8 +37,17 @@ export function Toolbar() {
       <div className="mx-1 h-5 w-px bg-border" />
 
       <div className="flex min-w-0 items-center gap-1.5 text-xs">
-        <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="truncate font-medium">{branch}</span>
+        {/* The branch name doubles as the way into the branch switcher. */}
+        <button
+          type="button"
+          disabled={!status?.root}
+          title={status?.root ? "Branches" : undefined}
+          onClick={() => setView("branches")}
+          className="flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 outline-none hover:bg-accent/60 focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none"
+        >
+          <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="truncate font-medium">{branch}</span>
+        </button>
         {status?.root ? (
           <span className="hidden truncate text-muted-foreground sm:inline">{status.root}</span>
         ) : null}
