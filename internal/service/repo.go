@@ -7,6 +7,7 @@ import (
 	"log"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -32,6 +33,11 @@ type RepoService struct {
 	win      *mygo.Window
 	lastOp   time.Time
 	onChange func(root, reason string)
+
+	// pickerOpen is held while the repository picker is up. AppKit refuses a
+	// second sheet on the same window, and the second caller would then wait
+	// for a dialog that never appears.
+	pickerOpen atomic.Bool
 
 	watchMu      sync.Mutex
 	watchCancel  context.CancelFunc
@@ -91,6 +97,7 @@ func (m *MenuActions) RefreshFromMenu() {
 func (s *RepoService) openPath(path string, quiet bool) {
 	go func() {
 		root, err := s.activate(context.Background(), path, s.window())
+		log.Printf("service: open %q: root=%q err=%v", path, root, err)
 		if err != nil {
 			log.Printf("service: open %q failed: %v", path, err)
 			if !quiet {
@@ -293,12 +300,21 @@ func (s *RepoService) open(ctx context.Context, path string, parent *mygo.Window
 // caller: the native open paths let the page load it once from its event.
 func (s *RepoService) activate(ctx context.Context, path string, parent *mygo.Window) (string, error) {
 	if path == "" {
+		// One picker at a time: a click while the sheet is up would ask
+		// AppKit for a second sheet on the same window, which it refuses, and
+		// the caller would wait for a dialog that never appears.
+		if !s.pickerOpen.CompareAndSwap(false, true) {
+			return "", nil
+		}
+		defer s.pickerOpen.Store(false)
+		log.Printf("service: showing the repository picker")
 		picked, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent:    parent,
 			Title:     "Open Repository",
 			Message:   "Choose a Git repository",
 			Directory: true,
 		})
+		log.Printf("service: picker returned %v, err=%v", picked, err)
 		if err != nil {
 			return "", err
 		}

@@ -132,6 +132,11 @@ picker, Cmd+Enter commits (including from the focused message field).
   discarded by the app.
 - **Watcher echo**: the existing self-write window still suppresses the
   refresh a write causes, so a stage does not repaint the same diff twice.
+- **Open Repository twice**: the second request is ignored while the picker is
+  up. The panel is a sheet on the window, and AppKit refuses a second sheet
+  there; the caller would wait forever for a dialog that never shows. The
+  panel can take a second or two to appear the first time, as its file browser
+  starts.
 - **Commit draft**: the message survives refreshes and tab switches, and is
   cleared only after a successful commit.
 - **Theme**: light/dark follows the system; diff colors must stay legible in
