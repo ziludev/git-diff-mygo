@@ -77,6 +77,13 @@ func Discover(ctx context.Context, path string) (string, error) {
 	return root, nil
 }
 
+// HeadExists reports whether HEAD points at a commit. It is false on an
+// unborn branch, where history and reset have nothing to work with.
+func (r *Runner) HeadExists(ctx context.Context) bool {
+	_, err := r.Run(ctx, "rev-parse", "--verify", "--quiet", "HEAD")
+	return err == nil
+}
+
 // Run runs git with args and returns its standard output.
 func (r *Runner) Run(ctx context.Context, args ...string) ([]byte, error) {
 	return r.RunInput(ctx, nil, args...)

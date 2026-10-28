@@ -54,12 +54,15 @@ func (r *Runner) Diff(ctx context.Context, req DiffRequest) (DiffResult, error) 
 	if req.Staged {
 		args = append(args, "--cached")
 	}
-	args = append(args, "--")
-	if req.OrigPath != "" && req.OrigPath != req.Path {
-		args = append(args, req.OrigPath)
-	}
-	args = append(args, req.Path)
+	return r.patch(ctx, req.Path, req.OrigPath, args...)
+}
 
+// patch runs a patch-producing command limited to one file, with the path
+// limit and the result postamble shared by every diff the app renders.
+func (r *Runner) patch(ctx context.Context, path, origPath string, args ...string) (DiffResult, error) {
+	res := DiffResult{Path: path}
+	args = append(args, "--")
+	args = append(args, Paths(path, origPath)...)
 	out, err := r.Run(ctx, args...)
 	if err != nil {
 		return res, err
@@ -230,7 +233,7 @@ func (r *Runner) Unstage(ctx context.Context, paths ...string) error {
 	if len(paths) == 0 {
 		return errors.New("no paths")
 	}
-	if _, err := r.Run(ctx, "rev-parse", "--verify", "HEAD"); err != nil {
+	if !r.HeadExists(ctx) {
 		// Unborn branch: there is no HEAD to reset to.
 		args := append([]string{"rm", "--cached", "-r", "--"}, paths...)
 		_, err := r.Run(ctx, args...)
