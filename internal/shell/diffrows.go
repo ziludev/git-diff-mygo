@@ -207,11 +207,11 @@ func buildDiffRows(p patchFile, layout diffLayout, gaps map[int]*diffGap) []diff
 // reads cannot disagree.
 func (a *App) diffSource() (id diffSourceID, req gitx.FileTextRequest, ok bool) {
 	if a.view == ViewHistory {
-		if a.expanded == nil || a.commitFile == nil {
+		if a.selectedCommit == nil || a.commitFile == nil {
 			return diffSourceID{}, gitx.FileTextRequest{}, false
 		}
-		req = gitx.FileTextRequest{Path: a.commitFile.Path, Rev: a.expanded.OID}
-		return diffSourceID{history: true, oid: a.expanded.OID, path: req.Path}, req, true
+		req = gitx.FileTextRequest{Path: a.commitFile.Path, Rev: a.selectedCommit.OID}
+		return diffSourceID{history: true, oid: a.selectedCommit.OID, path: req.Path}, req, true
 	}
 	if a.selection == nil {
 		return diffSourceID{}, gitx.FileTextRequest{}, false

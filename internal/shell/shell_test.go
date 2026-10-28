@@ -219,24 +219,37 @@ func TestHistoryRowShowsColumns(t *testing.T) {
 	}
 }
 
-func TestHistoryFilesIndentUnderMessage(t *testing.T) {
+func TestHistoryDetailsAboveFiles(t *testing.T) {
 	app := historyTestApp()
-	app.expanded = &app.commits[0]
-	app.commitFiles = []gitx.FileEntry{{Path: "src/main.go", Status: "M"}}
+	app.selectedCommit = &app.commits[0]
+	app.commitBody = "Why this change\nSecond line"
+	app.commitFiles = []gitx.FileEntry{
+		{Path: "src/main.go", Status: "M", Additions: 3, Deletions: 1},
+		{Path: "src/util.go", Status: "A", Additions: 9},
+	}
+	app.commitFile = &app.commitFiles[0]
 	tt := ui.NewTester(app.View, 1100, 720)
 
-	subject, ok := tt.Find("Add avatars")
-	if !ok {
+	// The right panel shows the message body, then the file list; the sidebar
+	// keeps one row per commit.
+	body, okBody := tt.Find("Why this change")
+	file, okFile := tt.Find("src/main.go")
+	meta, okMeta := tt.Find(commitMeta(&app.commits[0]))
+	if !okBody || !okFile || !okMeta {
 		t.Fatalf("texts = %q", tt.Texts())
 	}
-	file, ok := tt.Find("src/main.go")
-	if !ok {
-		t.Fatalf("texts = %q", tt.Texts())
+	const sidebar = 380
+	if body.X < sidebar || file.X < sidebar {
+		t.Fatalf("details and files belong to the right panel: body=%v file=%v", body, file)
 	}
-	// The file row is indented to the message column, then past its status
-	// letter, so it starts right of the message.
-	if file.X <= subject.X {
-		t.Fatalf("file starts at %v, subject at %v", file.X, subject.X)
+	if body.Y >= file.Y {
+		t.Fatalf("body at %v is not above the files at %v", body, file)
+	}
+	if meta.Y <= body.Y {
+		t.Fatalf("meta at %v is not below the body at %v", meta, body)
+	}
+	if !tt.HasText("src/util.go") {
+		t.Fatalf("second file missing in %q", tt.Texts())
 	}
 }
 

@@ -13,17 +13,14 @@ import (
 )
 
 // The commit row's columns, left to right: avatar, author, time, lane graph,
-// expander, message and ref chips. The fixed widths keep the graph and the
-// messages at one x down the list, as IDEA's log does.
+// message and ref chips. The fixed widths keep the graph and the messages at
+// one x down the list, as IDEA's log does.
 const (
 	// historyAvatarSize is the diameter of the author's avatar disc.
 	historyAvatarSize float32 = 20
 	// historyAuthorWidth and historyTimeWidth are the author and time columns.
 	historyAuthorWidth float32 = 84
 	historyTimeWidth   float32 = 58
-	// historyChevronWidth fixes the expand marker so the message column has
-	// the same left edge on every row.
-	historyChevronWidth float32 = 8
 	// historyRowGap is the space between two columns.
 	historyRowGap float32 = 6
 	// historyRowPad is the space the row leaves on each side.
@@ -43,19 +40,17 @@ var avatarColors = []ui.Color{
 	ui.Hex("#64748b"),
 }
 
-// historyRow is one line of the history list: a commit, a file under an
-// expanded commit, or the "load older" footer.
+// historyRow is one line of the history list: a commit or the "load older"
+// footer. Files live in the right panel with the commit's details, as in
+// IDEA's log, so the list stays one row per commit.
 type historyRow struct {
 	key    string
 	index  int // the commit's position in App.commits
 	commit *gitx.Commit
-	file   *gitx.FileEntry
 	more   bool
-	note   string
 }
 
 func (a *App) historyView(c *ui.Context, p palette) {
-	t := c.Theme()
 	if a.status.Root != "" {
 		a.ensureCommits()
 	}
@@ -72,27 +67,17 @@ func (a *App) historyView(c *ui.Context, p palette) {
 	}
 
 	rows := a.historyRows()
-	// A commit's files and notes line up with its message column, so they read
-	// as its children.
-	indent := a.historyMessageX()
 	ui.List(c, &a.historyList, len(rows), func(i int) {
 		r := rows[i]
-		switch {
-		case r.more:
+		if r.more {
 			ui.Row(c).FillWidth().Height(36).Center().Children(func() {
 				btn := ui.Button(c, "Load older commits").Height(24).FontSize(11).
 					Disabled(a.loadingCommits)
 				btn.OnClick(func() { a.loadCommits(true) })
 			})
-		case r.note != "":
-			ui.Row(c).FillWidth().Height(24).PaddingStart(indent).Center().Children(func() {
-				ui.Text(c, r.note).FontSize(10).TextColor(t.TextMuted)
-			})
-		case r.file != nil:
-			a.commitFileRow(c, p, *r.file, indent)
-		case r.commit != nil:
-			a.commitRow(c, p, *r.commit, r)
+			return
 		}
+		a.commitRow(c, p, *r.commit, r)
 	}).ItemKey(func(i int) any {
 		if i < len(rows) {
 			return rows[i].key
@@ -101,31 +86,13 @@ func (a *App) historyView(c *ui.Context, p palette) {
 	})
 }
 
-// historyRows flattens commits, the files of the expanded commit and the
-// footer into the rows a virtual list builds.
+// historyRows flattens the commits and the footer into the rows a virtual list
+// builds. A commit's files are not rows: the right panel lists them.
 func (a *App) historyRows() []historyRow {
-	rows := make([]historyRow, 0, len(a.commits)+len(a.commitFiles)+1)
+	rows := make([]historyRow, 0, len(a.commits)+1)
 	for i := range a.commits {
 		commit := &a.commits[i]
 		rows = append(rows, historyRow{key: "c:" + commit.OID, index: i, commit: commit})
-		if a.expanded == nil || a.expanded.OID != commit.OID {
-			continue
-		}
-		if a.loadingFiles {
-			rows = append(rows, historyRow{key: "f:loading", note: "Loading files…"})
-			continue
-		}
-		if len(a.commitFiles) == 0 {
-			rows = append(rows, historyRow{key: "f:none", note: "No files changed."})
-			continue
-		}
-		for i := range a.commitFiles {
-			file := &a.commitFiles[i]
-			rows = append(rows, historyRow{
-				key:  "f:" + commit.OID + ":" + file.Path,
-				file: file,
-			})
-		}
 	}
 	if a.hasMoreCommits {
 		rows = append(rows, historyRow{key: "more", more: true})
@@ -134,16 +101,16 @@ func (a *App) historyRows() []historyRow {
 }
 
 // commitRow draws one commit as a single line of columns: the author's avatar,
-// the author, the commit time, the lane graph, the expander, the message and
-// the ref chips on the right. The graph is a plain box with a painter: lines
-// and a round node, as the web view drew it.
+// the author, the commit time, the lane graph, the message and the ref chips on
+// the right. The graph is a plain box with a painter: lines and a round node,
+// as the web view drew it.
 func (a *App) commitRow(c *ui.Context, p palette, commit gitx.Commit, r historyRow) {
 	t := c.Theme()
-	expanded := a.expanded != nil && a.expanded.OID == commit.OID
+	selected := a.selectedCommit != nil && a.selectedCommit.OID == commit.OID
 	row := ui.Row(c).FillWidth().Height(graphRowHeight).PaddingX(historyRowPad).
 		Gap(historyRowGap).Clip().Cursor(ui.CursorPointer)
 	bg := t.Surface
-	if expanded {
+	if selected {
 		bg = t.Background
 		row.Background(bg)
 	}
@@ -151,8 +118,6 @@ func (a *App) commitRow(c *ui.Context, p palette, commit gitx.Commit, r historyR
 	if subject == "" {
 		subject = "(no message)"
 	}
-	// The row is one line, so the hash and the full time live in tooltips.
-	row.Tooltip(commit.Short + " " + subject)
 	row.OnClick(func() { a.selectCommit(commit) })
 	row.Children(func() {
 		a.commitAvatar(c, commit.Author)
@@ -170,24 +135,9 @@ func (a *App) commitRow(c *ui.Context, p palette, commit gitx.Commit, r historyR
 			g = a.graph[r.index]
 		}
 		a.drawGraph(c, a.graphLanes, g, bg)
-		chevron := "▸"
-		if expanded {
-			chevron = "▾"
-		}
-		ui.Text(c, chevron).FontSize(9).TextColor(t.TextMuted).Width(historyChevronWidth)
 		ui.Text(c, subject).FontSize(12).Grow(1).SingleLine()
 		a.commitRefs(c, p, commit.Refs)
 	})
-}
-
-// historyMessageX is where a commit's message starts: past the row padding,
-// the avatar, the author and time columns, the lane graph and the expander,
-// with one gap between each of those six parts. File rows use it as their
-// indent so they sit under their commit's message.
-func (a *App) historyMessageX() float32 {
-	graph := float32(a.graphLanes)*graphLaneWidth + graphLaneWidth
-	return historyRowPad + historyAvatarSize + historyAuthorWidth + historyTimeWidth +
-		historyChevronWidth + graph + 5*historyRowGap
 }
 
 // commitAvatar draws the author's initials on a colored disc. The color comes
@@ -240,31 +190,6 @@ func (a *App) commitRefs(c *ui.Context, p palette, refs []gitx.Ref) {
 		}
 		if hidden > 0 {
 			ui.Text(c, "+"+strconv.Itoa(hidden)).FontSize(9).TextColor(t.TextMuted)
-		}
-	})
-}
-
-func (a *App) commitFileRow(c *ui.Context, p palette, file gitx.FileEntry, indent float32) {
-	t := c.Theme()
-	selected := a.commitFile != nil && a.commitFile.Path == file.Path &&
-		a.commitFile.OrigPath == file.OrigPath
-	row := ui.Row(c).FillWidth().Height(24).PaddingStart(indent).PaddingEnd(8).Gap(6).Clip().
-		Cursor(ui.CursorPointer)
-	if selected {
-		row.Background(t.Background)
-	}
-	tip := pathLabel(file.Path, file.OrigPath)
-	row.Tooltip(tip)
-	row.OnClick(func() { a.selectCommitFile(file) })
-	row.Children(func() {
-		ui.Text(c, file.Status).Font(mono()).FontSize(10).Bold().
-			Width(12).TextAlign(ui.Center).TextColor(statusColor(p, file.Status))
-		ui.Text(c, file.Path).Font(mono()).FontSize(11).Grow(1).SingleLine()
-		if file.Binary {
-			ui.Text(c, "bin").FontSize(9).TextColor(t.TextMuted)
-		} else {
-			ui.Text(c, "+"+strconv.Itoa(file.Additions)).Font(mono()).FontSize(9).TextColor(p.addText)
-			ui.Text(c, "−"+strconv.Itoa(file.Deletions)).Font(mono()).FontSize(9).TextColor(p.delText)
 		}
 	})
 }

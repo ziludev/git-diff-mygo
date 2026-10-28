@@ -208,6 +208,20 @@ func (r *Runner) CommitFiles(ctx context.Context, oid string) ([]FileEntry, erro
 	return files, nil
 }
 
+// CommitBody returns the commit message below its subject line, which is what
+// the history detail panel shows under the subject. An empty commit message
+// yields an empty string, not an error.
+func (r *Runner) CommitBody(ctx context.Context, oid string) (string, error) {
+	if oid == "" {
+		return "", errors.New("empty commit")
+	}
+	out, err := r.Run(ctx, "show", "-s", "--format=%b", oid)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // parseNameStatus parses `--name-status -z`: STATUS NUL path NUL, with a
 // second path for renames and copies.
 func parseNameStatus(out []byte) []FileEntry {

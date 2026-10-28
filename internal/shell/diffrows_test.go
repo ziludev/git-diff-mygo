@@ -161,7 +161,7 @@ func TestDiffSourcePicksTheNewSide(t *testing.T) {
 
 	// A commit's new side is the commit itself.
 	app.view = ViewHistory
-	app.expanded = &gitx.Commit{OID: "abc123"}
+	app.selectedCommit = &gitx.Commit{OID: "abc123"}
 	app.commitFile = &gitx.FileEntry{Path: "notes.txt"}
 	id, req, ok := app.diffSource()
 	if !ok || !id.history || id.oid != "abc123" || id.path != "notes.txt" ||

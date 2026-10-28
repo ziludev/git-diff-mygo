@@ -70,6 +70,9 @@ internal/shell           UI state, async loaders, view functions,
 - The unchanged lines a patch omits appear as expandable rows
   (`▸ N unchanged lines`); expanding reads the new side of the diff lazily and
   shows it as context. Details and limits: `docs/diff.md`.
+- In the History tab the right panel holds, top to bottom, the selected
+  commit's details, its changed files (capped at six rows) and the diff of the
+  chosen file; the history list stays one row per commit.
 - Binary files and pure renames reuse the backend's `binary` flag and empty
   hunk list, and show a placeholder instead of an empty viewer.
 - Syntax highlighting, word-level highlighting and soft wrap are out of scope
@@ -82,8 +85,8 @@ internal/shell           UI state, async loaders, view functions,
    empty state, startup restore. No web page.
 2. **Changes + diff** — sections, filter, selection, stage/unstage/discard,
    hunk actions, commit panel.
-3. **History** — commit page, lane graph, ref chips, expand files, per-file
-   patch.
+3. **History** — commit page, lane graph, ref chips, the commit's details and
+   file list in the right panel, per-file patch.
 4. **Branches** — list, checkout, create at HEAD, delete merged, filter.
 5. **Remove the web frontend** — delete `src/`, `index.html`, `vite.config.ts`,
    `tsconfig.json`, `components.json`, the web dependencies and lockfile, and
@@ -100,8 +103,8 @@ Checked in the packaged app against a demo repository:
 - Unified/Split diff layouts, Side by side/Stacked panes, and expanding a
   worktree gap (a commit gap is covered by `gitx` and row-builder tests);
 - history columns (avatar, author, time, lane graph, message, chips) checked
-  in the packaged app; the expanded commit's file list and its indent under
-  the message are covered by `internal/shell` tests;
+  in the packaged app; the commit's details, file list and diff in the right
+  panel are covered by `internal/shell` tests;
 - branch list, checkout by row click, create from the inline field, delete
   with the confirmation dialog;
 - screen refresh after an external file edit (watcher), startup restore;
@@ -125,7 +128,7 @@ picker, Cmd+Enter commits (including from the focused message field).
 - **Never block the view**: status, log, for-each-ref and patches are async;
   a slow repository keeps the window responsive.
 - **Repo switch**: an epoch per projection drops responses for the repository
-  the user already left; selections and expanded commits reset.
+  the user already left; selections and the selected commit reset.
 - **Unborn branch**: empty history, empty branch list, creation disabled;
   **detached HEAD**: no current branch row and a warning line.
 - **Dirty worktree checkout**: git's refusal is shown as-is; nothing is

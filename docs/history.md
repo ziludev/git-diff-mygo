@@ -16,17 +16,20 @@ and **History**.
 
 - History lists the commits of every ref (`--all`), newest first. A commit is
   one line of fixed columns, left to right: the author's avatar, the author,
-  the relative commit time, the lane graph, an expander, the message and its
-  ref chips on the right. 100 commits per page with a "Load older commits"
-  button.
+  the relative commit time, the lane graph, the message and its ref chips on
+  the right. 100 commits per page with a "Load older commits" button.
 - Each row carries up to two branch/tag chips (tags in amber, branches muted)
   plus a `+N` count for the rest, so a tag or a side branch is visible without
-  opening the commit.
-- Clicking a commit expands it in place and lists its changed files with
-  status letter and `+N −M` counts. Its first file is selected immediately,
-  so the right panel never sits empty behind an expanded commit.
-- Clicking a file shows its patch in the right panel. The hunk stage/discard
-  buttons are hidden there: a commit's patch is history, not a worktree write.
+  selecting the commit.
+- Clicking a commit selects it; the list does not grow a file list. The right
+  panel shows, top to bottom: the commit's details (subject, message body,
+  author, exact time, short hash and ref chips), its changed files with status
+  letter and `+N −M` counts, and the diff of the selected file. This is IDEA's
+  log arrangement, minus the tree: the list stays one row per commit.
+- Selecting a commit selects its first file immediately, so the diff area
+  never sits empty behind a selection. Clicking another file in the list
+  loads that file's patch. The hunk stage/discard buttons are hidden there: a
+  commit's patch is history, not a worktree write.
 - A pure rename or mode change has a patch header but no hunks; the panel says
   "No textual changes" instead of rendering an empty viewer.
 - Merge commits are diffed against their first parent, which is what a reader
@@ -41,12 +44,24 @@ and **History**.
   is fetched and no name or address leaves the machine.
 - The author and time columns have fixed widths so the graph and the messages
   line up down the list. A long name truncates; the tooltips carry the full
-  name, the exact time and the short object id.
-- The files of an expanded commit are indented to the message column, so they
-  read as its children.
+  name and the exact time, and the details panel carries the hash.
 - The author column shows git's author (`%an`), the person who wrote the
   change. A rebase, amend or cherry-pick can make the committer differ; git's
   own default log shows the author too.
+
+### Details panel
+
+- The subject is one bold line; the body follows, at most four lines, and a
+  longer body ends its last line with an ellipsis. The meta line holds the
+  author, the exact time and the short hash.
+- The body is read only when a commit is selected (`git show -s --format=%b`),
+  so a page of 100 commits does not carry message bodies. A failed read only
+  drops the body: the subject, the files and the diff still show.
+- The file list is capped at six rows and scrolls inside the cap, so a commit
+  with many files cannot push the diff off screen.
+- A file click is tied to the selected commit: selecting another commit drops
+  the old file, its patch and any read still in flight (the per-projection
+  epoch and the OID check do that).
 
 ### Commit graph
 
@@ -81,7 +96,8 @@ Every row draws a colored lane column whose layout comes from `layoutGraph`
 ## Data flow
 
 ```
-RepoService.history({limit, skip})   -> gitx.Log      -> []Commit
+RepoService.history({limit, skip})   -> gitx.Log        -> []Commit
+RepoService.commitBody(oid)          -> gitx.CommitBody -> string
 RepoService.commitFiles(oid)         -> gitx.CommitFiles -> []FileEntry
 RepoService.commitDiff({oid, path})  -> gitx.CommitDiff  -> DiffResult
 ```
@@ -97,6 +113,7 @@ separately, so switching tabs does not reload or lose a diff.
 |---|---|
 | Log | `git log --all --topo-order --max-count=N --skip=M --format=%H%x1f%h%x1f%an%x1f%at%x1f%P%x1f%s%x00 --` |
 | Labels | `git for-each-ref --format=%(objectname)%09%(refname)` |
+| Body | `git show -s --format=%b <oid>` |
 | Files | `git show --format= --name-status -z -M --first-parent <oid>` and `git show --format= --numstat -z -M --first-parent <oid>` |
 | Patch | `git show --format= --no-color --no-ext-diff --no-textconv --no-show-signature --first-parent -M -U3 <oid> -- <path> [<origPath>]` |
 
@@ -119,7 +136,7 @@ record separator for the same reason.
 - **Binary files**: numstat reports `-`; the entry is marked `binary` and the
   patch reports "Binary files … differ", which the viewer already renders as
   a binary placeholder.
-- **Empty commit**: both commands return nothing; the commit expands to an
+- **Empty commit**: both commands return nothing; the commit's panel shows an
   empty file list rather than an error.
 - **Slow repositories**: history is loaded lazily when the tab is first opened,
   never on the watcher's status refreshes; a stale response is dropped by a

@@ -1,11 +1,25 @@
 package shell
 
 import (
+	"fmt"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
 	"twill/internal/gitx"
+)
+
+const (
+	// commitFileRowHeight is one row of the commit's file list.
+	commitFileRowHeight float32 = 24
+	// commitFileListMaxHeight caps that list so the diff keeps room; further
+	// files scroll inside it.
+	commitFileListMaxHeight float32 = 6 * commitFileRowHeight
+	// maxCommitBodyLines caps the message body in the details header; a long
+	// message is cut rather than pushing the diff off screen.
+	maxCommitBodyLines = 4
 )
 
 func (a *App) diffView(c *ui.Context, p palette) {
@@ -25,8 +39,8 @@ func (a *App) diffView(c *ui.Context, p palette) {
 	)
 
 	if history {
-		if a.expanded == nil {
-			placeholder = "Select a commit to see its files."
+		if a.selectedCommit == nil {
+			placeholder = "Select a commit to see its details."
 		} else if a.loadingFiles {
 			placeholder = "Loading files…"
 		} else if a.commitFile == nil {
@@ -57,6 +71,12 @@ func (a *App) diffView(c *ui.Context, p palette) {
 	}
 
 	ui.Column(c).FillHeight().FillWidth().Background(t.Background).Children(func() {
+		// The commit's details and files sit above its diff, as in IDEA's log.
+		if history && a.selectedCommit != nil {
+			a.commitDetails(c, p)
+			a.commitFileList(c, p)
+			ui.Divider(c)
+		}
 		a.diffHeader(c, p, history, path, origPath, has, patch)
 		ui.Divider(c)
 
@@ -92,6 +112,98 @@ func (a *App) diffView(c *ui.Context, p palette) {
 	})
 }
 
+// commitDetails draws the selected commit above its files and diff: the
+// subject with its ref chips, the body of the message, then the author, the
+// time and the hash.
+func (a *App) commitDetails(c *ui.Context, p palette) {
+	t := c.Theme()
+	commit := a.selectedCommit
+	ui.Column(c).FillWidth().Shrink(0).PaddingX(10).PaddingY(8).Gap(3).
+		Background(t.Surface).Children(func() {
+		subject := commit.Subject
+		if subject == "" {
+			subject = "(no message)"
+		}
+		ui.Row(c).FillWidth().Gap(6).Children(func() {
+			ui.Text(c, subject).FontSize(12).Bold().Grow(1).SingleLine()
+			a.commitRefs(c, p, commit.Refs)
+		})
+		for _, line := range commitBodyLines(a.commitBody) {
+			ui.Text(c, line).FontSize(11).TextColor(t.Text).SingleLine()
+		}
+		if a.loadingBody && a.commitBody == "" {
+			ui.Text(c, "Loading message…").FontSize(10).TextColor(t.TextMuted)
+		}
+		ui.Text(c, commitMeta(commit)).FontSize(10).TextColor(t.TextMuted).SingleLine()
+	})
+}
+
+// commitBodyLines is the body split into the lines the details header shows.
+// A body longer than the cap ends its last shown line with an ellipsis.
+func commitBodyLines(body string) []string {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return nil
+	}
+	lines := strings.Split(body, "\n")
+	if len(lines) > maxCommitBodyLines {
+		lines = lines[:maxCommitBodyLines]
+		lines[maxCommitBodyLines-1] += " …"
+	}
+	return lines
+}
+
+// commitMeta is the details line under the message: who, when and the hash.
+func commitMeta(commit *gitx.Commit) string {
+	author := commit.Author
+	if author == "" {
+		author = "unknown"
+	}
+	return fmt.Sprintf("%s · %s · %s", author,
+		time.Unix(commit.Time, 0).Format("2006-01-02 15:04"), commit.Short)
+}
+
+// commitFileList lists the selected commit's files above the diff. Clicking a
+// row shows that file's patch below; a long list scrolls inside the cap.
+func (a *App) commitFileList(c *ui.Context, p palette) {
+	if len(a.commitFiles) == 0 {
+		return
+	}
+	height := float32(len(a.commitFiles)) * commitFileRowHeight
+	if height > commitFileListMaxHeight {
+		height = commitFileListMaxHeight
+	}
+	ui.List(c, &a.commitFilesList, len(a.commitFiles), func(i int) {
+		a.commitFileListRow(c, p, a.commitFiles[i])
+	}).Height(height)
+}
+
+// commitFileListRow draws one file of the selected commit: status letter,
+// path and line counts, highlighted while its patch is the one shown.
+func (a *App) commitFileListRow(c *ui.Context, p palette, file gitx.FileEntry) {
+	t := c.Theme()
+	selected := a.commitFile != nil && a.commitFile.Path == file.Path &&
+		a.commitFile.OrigPath == file.OrigPath
+	row := ui.Row(c).FillWidth().Height(commitFileRowHeight).PaddingX(10).Gap(6).Clip().
+		Cursor(ui.CursorPointer)
+	if selected {
+		row.Background(t.Surface)
+	}
+	row.Tooltip(pathLabel(file.Path, file.OrigPath))
+	row.OnClick(func() { a.selectCommitFile(file) })
+	row.Children(func() {
+		ui.Text(c, file.Status).Font(mono()).FontSize(10).Bold().
+			Width(12).TextAlign(ui.Center).TextColor(statusColor(p, file.Status))
+		ui.Text(c, file.Path).Font(mono()).FontSize(11).Grow(1).SingleLine()
+		if file.Binary {
+			ui.Text(c, "bin").FontSize(9).TextColor(t.TextMuted)
+		} else {
+			ui.Text(c, "+"+strconv.Itoa(file.Additions)).Font(mono()).FontSize(9).TextColor(p.addText)
+			ui.Text(c, "−"+strconv.Itoa(file.Deletions)).Font(mono()).FontSize(9).TextColor(p.delText)
+		}
+	})
+}
+
 func (a *App) diffHeader(c *ui.Context, p palette, history bool, path, origPath string,
 	has bool, patch patchFile) {
 	t := c.Theme()
@@ -123,8 +235,8 @@ func (a *App) diffBadge(c *ui.Context, p palette, history bool) {
 	t := c.Theme()
 	label, fg, border := "", t.TextMuted, t.Border
 	if history {
-		if a.expanded != nil {
-			label = a.expanded.Short
+		if a.selectedCommit != nil {
+			label = a.selectedCommit.Short
 		}
 	} else if a.selection != nil {
 		switch {

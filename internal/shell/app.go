@@ -63,7 +63,11 @@ type App struct {
 	loadingCommits bool
 	historyErr     string
 
-	expanded          *gitx.Commit
+	// selectedCommit is the commit the right panel shows: its details, its
+	// files and the diff of the file picked among them.
+	selectedCommit    *gitx.Commit
+	commitBody        string
+	loadingBody       bool
 	commitFiles       []gitx.FileEntry
 	loadingFiles      bool
 	commitFile        *gitx.FileEntry
@@ -94,7 +98,9 @@ type App struct {
 	toastTimer   *time.Timer
 
 	historyList ui.ListState
-	diffList    ui.ListState
+	// commitFilesList scrolls the selected commit's file list.
+	commitFilesList ui.ListState
+	diffList        ui.ListState
 
 	// The diff pane's rows are derived, not read directly: a layout choice,
 	// an expanded gap and the shown patch all change them. diffDirty makes
@@ -116,6 +122,7 @@ type epochs struct {
 	diff       atomic.Uint64
 	commits    atomic.Uint64
 	files      atomic.Uint64
+	body       atomic.Uint64
 	commitDiff atomic.Uint64
 	branches   atomic.Uint64
 }
@@ -268,7 +275,7 @@ func (a *App) loadDiff(ch gitx.Change) {
 }
 
 // resetRepoState drops everything derived from the repository the user left:
-// loaded pages, expanded commits, branch lists and both diff selections.
+// loaded pages, the selected commit, branch lists and both diff selections.
 // Epochs are bumped so an in-flight response from the old repository cannot
 // land after the reset, and the loading flags are cleared so the new
 // repository's first load is not blocked by a request that will never finish.
@@ -445,21 +452,24 @@ func (a *App) ensureCommits() {
 	}
 }
 
-// selectCommit expands a commit into its files, or collapses it.
+// selectCommit shows a commit in the right panel: its message details, its
+// files and the diff of the first one. Selecting the commit already shown
+// changes nothing.
 func (a *App) selectCommit(c gitx.Commit) {
-	if a.expanded != nil && a.expanded.OID == c.OID {
-		a.resetCommitSelection()
+	if a.selectedCommit != nil && a.selectedCommit.OID == c.OID {
 		return
 	}
 	a.resetCommitSelection()
-	epoch := a.epochs.files.Add(1)
 	oid := c.OID
-	a.expanded = &c
+	a.selectedCommit = &c
+	a.loadCommitBody(oid)
+
+	epoch := a.epochs.files.Add(1)
 	a.loadingFiles = true
 	go func() {
 		files, err := a.svc.CommitFiles(context.Background(), oid)
 		a.apply(func() {
-			if epoch != a.epochs.files.Load() || a.expanded == nil || a.expanded.OID != oid {
+			if epoch != a.epochs.files.Load() || !a.showsCommit(oid) {
 				return
 			}
 			a.loadingFiles = false
@@ -468,8 +478,8 @@ func (a *App) selectCommit(c gitx.Commit) {
 				return
 			}
 			a.commitFiles = files
-			// Show the first file right away: an expanded commit with an
-			// empty right panel looks like it is still loading.
+			// Show the first file right away: a selected commit with an empty
+			// diff area looks like it is still loading.
 			if len(files) > 0 {
 				a.selectCommitFile(files[0])
 			}
@@ -477,8 +487,35 @@ func (a *App) selectCommit(c gitx.Commit) {
 	}()
 }
 
+// loadCommitBody reads the message below the subject for the detail panel.
+// A failure only drops the body: the subject and the files still show.
+func (a *App) loadCommitBody(oid string) {
+	epoch := a.epochs.body.Add(1)
+	a.loadingBody = true
+	go func() {
+		body, err := a.svc.CommitBody(context.Background(), oid)
+		a.apply(func() {
+			if epoch != a.epochs.body.Load() || !a.showsCommit(oid) {
+				return
+			}
+			a.loadingBody = false
+			if err != nil {
+				log.Printf("shell: read commit %s body: %v", oid, err)
+				return
+			}
+			a.commitBody = body
+		})
+	}()
+}
+
+// showsCommit reports whether oid is still the selected commit, which is what
+// makes a late file or body response worth installing.
+func (a *App) showsCommit(oid string) bool {
+	return a.selectedCommit != nil && a.selectedCommit.OID == oid
+}
+
 func (a *App) selectCommitFile(f gitx.FileEntry) {
-	commit := a.expanded
+	commit := a.selectedCommit
 	if commit == nil {
 		return
 	}
@@ -499,7 +536,7 @@ func (a *App) selectCommitFile(f gitx.FileEntry) {
 		})
 		patch := parsePatch(res.Patch)
 		a.apply(func() {
-			if epoch != a.epochs.commitDiff.Load() || a.expanded == nil || a.expanded.OID != oid {
+			if epoch != a.epochs.commitDiff.Load() || !a.showsCommit(oid) {
 				return
 			}
 			a.loadingCommitDiff = false
@@ -516,8 +553,11 @@ func (a *App) selectCommitFile(f gitx.FileEntry) {
 
 func (a *App) resetCommitSelection() {
 	a.epochs.files.Add(1)
+	a.epochs.body.Add(1)
 	a.epochs.commitDiff.Add(1)
-	a.expanded = nil
+	a.selectedCommit = nil
+	a.commitBody = ""
+	a.loadingBody = false
 	a.commitFiles = nil
 	a.loadingFiles = false
 	a.commitFile = nil
@@ -569,7 +609,7 @@ func (a *App) checkoutBranch(name string) {
 		if err := a.svc.CheckoutBranch(context.Background(), name); err != nil {
 			return err
 		}
-		// The selected diff and expanded commit belong to the branch we left.
+		// The selected diff and commit belong to the branch we left.
 		a.apply(func() {
 			a.resetDiff()
 			a.resetCommitSelection()

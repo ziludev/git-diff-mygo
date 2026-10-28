@@ -181,6 +181,15 @@ func (s *RepoService) CommitFiles(ctx context.Context, oid string) ([]gitx.FileE
 	return r.CommitFiles(ctx, oid)
 }
 
+// CommitBody returns the body of a commit message, below its subject.
+func (s *RepoService) CommitBody(ctx context.Context, oid string) (string, error) {
+	r, err := s.runner()
+	if err != nil {
+		return "", err
+	}
+	return r.CommitBody(ctx, oid)
+}
+
 // CommitDiff returns one file's patch inside a commit.
 func (s *RepoService) CommitDiff(ctx context.Context, req gitx.CommitDiffRequest) (gitx.DiffResult, error) {
 	r, err := s.runner()
