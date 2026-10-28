@@ -131,6 +131,16 @@ func (s *RepoService) Diff(ctx context.Context, req gitx.DiffRequest) (gitx.Diff
 	return r.Diff(ctx, req)
 }
 
+// FileLines returns one side of a diff's text, for expanding the unchanged
+// lines a patch omits. It never writes anything.
+func (s *RepoService) FileLines(ctx context.Context, req gitx.FileTextRequest) ([]string, error) {
+	r, err := s.runner()
+	if err != nil {
+		return nil, err
+	}
+	return r.FileLines(ctx, req)
+}
+
 // ApplyHunks stages, unstages, or discards selected hunks of one file.
 func (s *RepoService) ApplyHunks(ctx context.Context, req gitx.ApplyRequest) error {
 	return s.mutate(ctx, "apply", req.Path, func(r *gitx.Runner) error {

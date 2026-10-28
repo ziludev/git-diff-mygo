@@ -28,11 +28,14 @@ type patchLine struct {
 	Hunk int
 }
 
-// patchHunk describes one @@ header.
+// patchHunk describes one @@ header. OldCount is the old range the header
+// declares; the diff pane needs it to find the unchanged lines between two
+// hunks.
 type patchHunk struct {
 	Index     int
 	OldStart  int
 	NewStart  int
+	OldCount  int
 	Additions int
 	Deletions int
 }
@@ -68,16 +71,22 @@ func parsePatch(patch string) patchFile {
 		case strings.HasPrefix(text, "@@ "):
 			m := hunkHeader.FindStringSubmatch(text)
 			hunk++
-			oldStart, newStart := 0, 0
+			oldStart, newStart, oldCount := 0, 0, 0
 			if m != nil {
 				oldStart, _ = strconv.Atoi(m[1])
 				newStart, _ = strconv.Atoi(m[3])
+				// A header without a count means one line.
+				oldCount = 1
+				if m[2] != "" {
+					oldCount, _ = strconv.Atoi(m[2])
+				}
 			}
 			oldNo, newNo = oldStart, newStart
 			out.Hunks = append(out.Hunks, patchHunk{
 				Index:    hunk,
 				OldStart: oldStart,
 				NewStart: newStart,
+				OldCount: oldCount,
 			})
 			out.Lines = append(out.Lines, patchLine{Kind: lineHunk, Text: text, Hunk: hunk})
 		case hunk >= 0 && strings.HasPrefix(text, "+"):

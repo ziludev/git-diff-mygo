@@ -38,7 +38,11 @@ type App struct {
 	actions *service.MenuActions
 	win     *mygo.Window
 
-	sidebar float32
+	// sidebar is the file list's width when the panes sit side by side;
+	// sidebarHeight is its height when they are stacked.
+	sidebar       float32
+	sidebarHeight float32
+	panes         paneLayout
 
 	status        gitx.Status
 	loadingStatus bool
@@ -92,6 +96,16 @@ type App struct {
 	historyList ui.ListState
 	diffList    ui.ListState
 
+	// The diff pane's rows are derived, not read directly: a layout choice,
+	// an expanded gap and the shown patch all change them. diffDirty makes
+	// the next build recompute; diffKey names the patch they belong to.
+	diffLayout diffLayout
+	diffRows   []diffRow
+	diffKey    diffSourceID
+	diffGaps   map[int]*diffGap
+	diffDirty  bool
+	gapText    gapRead
+
 	epochs epochs
 }
 
@@ -116,10 +130,11 @@ type confirmation struct {
 // New returns the shell for one window.
 func New(svc *service.RepoService, actions *service.MenuActions) *App {
 	a := &App{
-		svc:      svc,
-		actions:  actions,
-		sidebar:  380,
-		toastDur: 4 * time.Second,
+		svc:           svc,
+		actions:       actions,
+		sidebar:       380,
+		sidebarHeight: 380,
+		toastDur:      4 * time.Second,
 	}
 	// The watcher and menu actions run outside the view; marshal their
 	// notifications back to the main thread before touching state.
@@ -223,6 +238,9 @@ func (a *App) loadDiff(ch gitx.Change) {
 	a.selection = &ch
 	a.loadingDiff = true
 	a.errorText = ""
+	// The patch is about to be replaced; its gap state and reads no longer
+	// describe what the pane shows.
+	a.resetDiffGaps()
 	go func() {
 		res, err := a.svc.Diff(context.Background(), gitx.DiffRequest{
 			Path:      ch.Path,
@@ -282,6 +300,9 @@ func (a *App) resetDiff() {
 	a.hasDiff = false
 	a.loadingDiff = false
 	a.errorText = ""
+	// The patch is gone, so neither its expansions nor a read still in flight
+	// may survive.
+	a.resetDiffGaps()
 }
 
 // write serializes one index or worktree write, then refreshes. A failure is
@@ -465,6 +486,7 @@ func (a *App) selectCommitFile(f gitx.FileEntry) {
 	oid := commit.OID
 	a.commitFile = &f
 	a.loadingCommitDiff = true
+	a.resetDiffGaps()
 	a.commitDiff = gitx.DiffResult{}
 	a.commitPatch = patchFile{}
 	a.hasCommitDiff = false
@@ -504,6 +526,7 @@ func (a *App) resetCommitSelection() {
 	a.hasCommitDiff = false
 	a.loadingCommitDiff = false
 	a.commitErr = ""
+	a.resetDiffGaps()
 }
 
 func (a *App) loadBranches() {

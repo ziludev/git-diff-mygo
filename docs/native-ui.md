@@ -64,6 +64,12 @@ internal/shell           UI state, async loaders, view functions,
 - The pane is a virtualized list of monospace lines: added lines green-tinted,
   deleted red-tinted, hunk headers a muted bar with stage/discard actions,
   meta lines (diff/index/---/++) muted.
+- The header switches between the unified layout and a split one that pairs
+  old and new lines; the toolbar switches the file list between side by side
+  and stacked above the diff. Both choices are per session.
+- The unchanged lines a patch omits appear as expandable rows
+  (`▸ N unchanged lines`); expanding reads the new side of the diff lazily and
+  shows it as context. Details and limits: `docs/diff.md`.
 - Binary files and pure renames reuse the backend's `binary` flag and empty
   hunk list, and show a placeholder instead of an empty viewer.
 - Syntax highlighting, word-level highlighting and soft wrap are out of scope
@@ -91,6 +97,8 @@ Checked in the packaged app against a demo repository:
 
 - changes list selection and diff, file stage/unstage, commit via button and
   via Cmd+Enter inside the message field;
+- Unified/Split diff layouts, Side by side/Stacked panes, and expanding a
+  worktree gap (a commit gap is covered by `gitx` and row-builder tests);
 - history expand, file list, per-file patch, lane graph and ref chips;
 - branch list, checkout by row click, create from the inline field, delete
   with the confirmation dialog;
@@ -103,8 +111,8 @@ picker, Cmd+Enter commits (including from the focused message field).
 
 ## Known gaps
 
-- The diff is unified only: no syntax/word highlighting, and long lines are
-  clipped horizontally without a horizontal scrollbar.
+- No syntax or word-level highlighting, and long lines are clipped
+  horizontally without a horizontal scrollbar in both diff layouts.
 - Clickable rows are plain views: they respond to the mouse but are not
   exposed to the accessibility tree as buttons.
 - Hunk-level stage/unstage/discard is implemented and unit-tested through the

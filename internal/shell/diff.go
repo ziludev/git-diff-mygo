@@ -112,6 +112,10 @@ func (a *App) diffHeader(c *ui.Context, p palette, history bool, path, origPath 
 		}
 		ui.Spacer(c)
 		a.diffBadge(c, p, history)
+		if segmentedEnum(c, &a.diffLayout, "Unified", "Split") {
+			// The rows pair old and new lines differently per layout.
+			a.diffDirty = true
+		}
 	})
 }
 
@@ -141,43 +145,149 @@ func (a *App) diffBadge(c *ui.Context, p palette, history bool) {
 	chip.Children(func() { ui.Text(c, label).FontSize(9).TextColor(fg) })
 }
 
-// patchView draws the unified patch as a virtual list. Each hunk header is a
-// row with its own stage, unstage or discard actions.
+// patchView draws the patch as a virtual list of diff rows, in the layout the
+// header selected. Each hunk header is a row with its own stage, unstage or
+// discard actions.
 func (a *App) patchView(c *ui.Context, p palette, patch patchFile, editable bool) {
-	t := c.Theme()
-	ui.List(c, &a.diffList, len(patch.Lines), func(i int) {
-		line := patch.Lines[i]
-		if line.Kind == lineHunk {
-			a.hunkRow(c, p, patch, line, editable)
-			return
-		}
-		row := ui.Row(c).FillWidth().Height(18).Clip().Gap(6).PaddingX(6)
-		switch line.Kind {
-		case lineAdd:
-			row.Background(p.addBg)
-		case lineDel:
-			row.Background(p.delBg)
-		case lineMeta:
-			row.Background(p.hunkBg)
-		}
-		row.Children(func() {
-			numColor := t.TextMuted
-			ui.Text(c, gutter(line.OldNo)).Font(mono()).FontSize(9).Width(30).
-				TextAlign(ui.End).TextColor(numColor)
-			ui.Text(c, gutter(line.NewNo)).Font(mono()).FontSize(9).Width(30).
-				TextAlign(ui.End).TextColor(numColor)
-			fg := t.Text
-			if line.Kind == lineMeta {
-				fg = p.metaText
+	// The header above may have changed the layout; rebuild before drawing.
+	a.syncDiffRows(patch)
+	split := a.diffLayout == diffSplit
+	ui.List(c, &a.diffList, len(a.diffRows), func(i int) {
+		row := a.diffRows[i]
+		switch row.Kind {
+		case rowHunk:
+			a.hunkRow(c, p, patch, row.Hunk, editable)
+		case rowGap:
+			a.gapRow(c, p, row.Gap)
+		case rowMeta:
+			a.metaRow(c, p, row.Meta)
+		default:
+			if split {
+				a.splitRow(c, p, row)
+			} else {
+				a.lineRow(c, p, row.Left)
 			}
-			ui.Text(c, line.Text).Font(mono()).FontSize(11).TextColor(fg).SingleLine()
-		})
+		}
 	}).ItemKey(func(i int) any { return i })
 }
 
-func (a *App) hunkRow(c *ui.Context, p palette, patch patchFile, line patchLine, editable bool) {
+// diffGutterWidth keeps line numbers aligned in both layouts.
+const diffGutterWidth float32 = 30
+
+// diffNumber draws a right-aligned line number; 0 draws an empty gutter.
+func diffNumber(c *ui.Context, num int) {
+	ui.Text(c, gutter(num)).Font(mono()).FontSize(9).Width(diffGutterWidth).
+		TextAlign(ui.End).TextColor(c.Theme().TextMuted)
+}
+
+// diffText draws one numbered line at the font both layouts share.
+func diffText(c *ui.Context, num int, text string) {
+	diffNumber(c, num)
+	ui.Text(c, text).Font(mono()).FontSize(11).SingleLine()
+}
+
+// lineTint is the background a changed line gets, if any. A split row's old
+// half only ever holds deletions and context, its new half additions and
+// context, so the line's own kind is enough on both sides.
+func lineTint(p palette, line *patchLine) (ui.Color, bool) {
+	if line == nil {
+		return ui.Color{}, false
+	}
+	switch line.Kind {
+	case lineAdd:
+		return p.addBg, true
+	case lineDel:
+		return p.delBg, true
+	}
+	return ui.Color{}, false
+}
+
+// diffLineBand starts one full-width row at the diff's line height.
+func diffLineBand(c *ui.Context) ui.Element {
+	return ui.Row(c).FillWidth().Height(18).Clip().Gap(6).PaddingX(6)
+}
+
+// lineRow draws one line of the unified layout: two gutters and the text.
+func (a *App) lineRow(c *ui.Context, p palette, line *patchLine) {
+	if line == nil {
+		return
+	}
+	row := diffLineBand(c)
+	if bg, ok := lineTint(p, line); ok {
+		row.Background(bg)
+	}
+	row.Children(func() {
+		diffNumber(c, line.OldNo)
+		diffText(c, line.NewNo, line.Text)
+	})
+}
+
+// metaRow draws a patch header line (diff/git, index, ---/+++) full width.
+// Empty gutters keep it aligned with the numbered lines below it.
+func (a *App) metaRow(c *ui.Context, p palette, text string) {
+	diffLineBand(c).Background(p.hunkBg).Children(func() {
+		diffNumber(c, 0)
+		diffNumber(c, 0)
+		ui.Text(c, text).Font(mono()).FontSize(11).TextColor(p.metaText).SingleLine()
+	})
+}
+
+// splitRow draws one paired row: the old side, a divider, the new side.
+func (a *App) splitRow(c *ui.Context, p palette, row diffRow) {
 	t := c.Theme()
-	hunk := patch.Hunks[line.Hunk]
+	ui.Row(c).FillWidth().Height(18).Clip().Children(func() {
+		a.splitHalf(c, p, row.Left, true)
+		ui.Box(c).Width(1).FillHeight().Background(t.Border)
+		a.splitHalf(c, p, row.Right, false)
+	})
+}
+
+// splitHalf draws one side of a split row. An empty half keeps the columns
+// aligned where the other side has no matching line.
+func (a *App) splitHalf(c *ui.Context, p palette, line *patchLine, oldSide bool) {
+	half := ui.Row(c).Grow(1).FillHeight().Clip().Gap(6).PaddingX(6)
+	if line == nil {
+		return
+	}
+	if bg, ok := lineTint(p, line); ok {
+		half.Background(bg)
+	}
+	num := line.NewNo
+	if oldSide {
+		num = line.OldNo
+	}
+	half.Children(func() { diffText(c, num, line.Text) })
+}
+
+// gapRow is the expand/collapse control for the unchanged lines git omitted
+// between two hunks.
+func (a *App) gapRow(c *ui.Context, p palette, g *diffGap) {
+	t := c.Theme()
+	noun := "lines"
+	if g.Count == 1 {
+		noun = "line"
+	}
+	var label string
+	switch {
+	case g.Loading:
+		label = "Loading " + strconv.Itoa(g.Count) + " unchanged " + noun + "…"
+	case g.Expanded:
+		label = "▾ " + strconv.Itoa(g.Count) + " unchanged " + noun
+	default:
+		label = "▸ " + strconv.Itoa(g.Count) + " unchanged " + noun
+	}
+	row := ui.Row(c).FillWidth().Height(20).Center().Cursor(ui.CursorPointer).
+		Background(p.hunkBg)
+	row.Tooltip("Show the lines this patch omitted")
+	row.OnClick(func() { a.toggleGap(g) })
+	row.Children(func() {
+		ui.Text(c, label).FontSize(10).TextColor(t.TextMuted)
+	})
+}
+
+func (a *App) hunkRow(c *ui.Context, p palette, patch patchFile, index int, editable bool) {
+	t := c.Theme()
+	hunk := patch.Hunks[index]
 	staged := a.selection != nil && a.selection.Staged
 	ui.Row(c).FillWidth().Height(26).PaddingX(6).Gap(6).Background(p.hunkBg).Children(func() {
 		ui.Text(c, "Hunk "+strconv.Itoa(hunk.Index+1)).FontSize(10).Bold().TextColor(t.TextMuted)

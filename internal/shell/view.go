@@ -10,6 +10,14 @@ import (
 	"twill/internal/gitx"
 )
 
+// paneLayout arranges the file list and the diff pane.
+type paneLayout int
+
+const (
+	panesSideBySide paneLayout = iota
+	panesStacked
+)
+
 // palette holds the colors the diff and status letters need, which the theme
 // does not name: they follow the theme's light or dark appearance.
 type palette struct {
@@ -84,11 +92,13 @@ func (a *App) View(c *ui.Context) {
 	ui.Column(c).Fill().Background(t.Background).Children(func() {
 		a.toolbar(c, p)
 		ui.Divider(c)
-		ui.Split(c, &a.sidebar, func() {
-			a.sidebarView(c, p)
-		}, func() {
-			a.diffView(c, p)
-		}).Grow(1)
+		sidebar := func() { a.sidebarView(c, p) }
+		diff := func() { a.diffView(c, p) }
+		if a.panes == panesStacked {
+			ui.SplitVertical(c, &a.sidebarHeight, sidebar, diff).Grow(1)
+		} else {
+			ui.Split(c, &a.sidebar, sidebar, diff).Grow(1)
+		}
 		if a.toast != "" {
 			a.toastBar(c, p)
 		}
@@ -124,6 +134,8 @@ func (a *App) toolbar(c *ui.Context, p palette) {
 		} else {
 			ui.Spacer(c)
 		}
+		// The arrangement changes no derived data: the next frame draws it.
+		segmentedEnum(c, &a.panes, "Side by side", "Stacked")
 		refresh := ui.Button(c, "Refresh").Height(26).FontSize(11).
 			Disabled(a.actions == nil)
 		refresh.OnClick(func() {
@@ -277,6 +289,18 @@ func (a *App) tab(c *ui.Context, label, badge string, active bool, onClick func(
 	})
 	btn.Label(label)
 	btn.OnClick(onClick)
+}
+
+// segmentedEnum binds a named int enum to a segmented control and reports
+// whether the user picked another value.
+func segmentedEnum[T ~int](c *ui.Context, value *T, labels ...string) bool {
+	picked := int(*value)
+	ui.Segmented(c, &picked, labels...).Height(24).FontSize(10)
+	if T(picked) == *value {
+		return false
+	}
+	*value = T(picked)
+	return true
 }
 
 // filterNeedle normalizes a filter box so callers share one matching rule.
