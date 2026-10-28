@@ -13,8 +13,18 @@ import (
 func newTestRepo(t *testing.T) *Runner {
 	t.Helper()
 	r := New(t.TempDir())
+	if _, err := r.Run(context.Background(), "init", "-q"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	configTestUser(t, r)
+	return r
+}
+
+// configTestUser gives a test repository the identity and signing settings a
+// commit needs, with no dependency on the machine's git config.
+func configTestUser(t *testing.T, r *Runner) {
+	t.Helper()
 	for _, args := range [][]string{
-		{"init", "-q"},
 		{"config", "user.email", "test@example.com"},
 		{"config", "user.name", "test"},
 		{"config", "commit.gpgsign", "false"},
@@ -23,7 +33,6 @@ func newTestRepo(t *testing.T) *Runner {
 			t.Fatalf("git %s: %v", strings.Join(args, " "), err)
 		}
 	}
-	return r
 }
 
 func writeFile(t *testing.T, r *Runner, name, content string) {

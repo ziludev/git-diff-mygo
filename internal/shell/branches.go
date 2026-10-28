@@ -17,7 +17,7 @@ func (a *App) branchView(c *ui.Context, p palette) {
 			ui.Box(c).Grow(1).Children(func() {
 				a.filterInput(c, &a.branchFilter, "Filter branches")
 			})
-			iconButton(c, "+", "New branch from HEAD", a.writing || unborn, func() {
+			iconButton(c, "+", "New branch from HEAD", a.busy() || unborn, func() {
 				a.creating = true
 				a.newName = ""
 				a.focusNew = true
@@ -96,7 +96,7 @@ func (a *App) newBranchRow(c *ui.Context, p palette) {
 			a.creating = false
 			a.newName = ""
 		})
-		iconButton(c, "✓", "Create branch", a.writing || strings.TrimSpace(a.newName) == "",
+		iconButton(c, "✓", "Create branch", a.busy() || strings.TrimSpace(a.newName) == "",
 			func() { a.submitNewBranch() })
 		iconButton(c, "✕", "Cancel", false, func() {
 			a.creating = false
@@ -107,7 +107,7 @@ func (a *App) newBranchRow(c *ui.Context, p palette) {
 
 func (a *App) submitNewBranch() {
 	name := strings.TrimSpace(a.newName)
-	if name == "" || a.writing {
+	if name == "" || a.busy() {
 		return
 	}
 	a.creating = false
@@ -141,14 +141,14 @@ func (a *App) branchRow(c *ui.Context, p palette, b gitx.BranchEntry) {
 		left.Tooltip(b.Subject)
 		if !b.Current {
 			left.OnClick(func() {
-				if !a.writing {
+				if !a.busy() {
 					a.checkoutBranch(b.Name)
 				}
 			})
 		}
 
 		if !b.Current {
-			iconButton(c, "🗑", "Delete branch "+b.Name, a.writing, func() {
+			iconButton(c, "🗑", "Delete branch "+b.Name, a.busy(), func() {
 				a.deleteBranch(b.Name)
 			})
 		}

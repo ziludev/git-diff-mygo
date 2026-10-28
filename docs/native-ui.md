@@ -107,6 +107,9 @@ Checked in the packaged app against a demo repository:
   panel are covered by `internal/shell` tests;
 - branch list, checkout by row click, create from the inline field, delete
   with the confirmation dialog;
+- Fetch/Pull/Push in the toolbar and the Git menu; Fetch was run against a real
+  repository without an error toast, Pull and Push only in tests (running them
+  against the open repository would move its branches);
 - screen refresh after an external file edit (watcher), startup restore;
 - `bun run build` after `src/` was deleted: signed `.app` and `.dmg` still
   produced (the build no longer runs a frontend step).

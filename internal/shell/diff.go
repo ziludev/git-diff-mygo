@@ -59,10 +59,11 @@ func (a *App) diffView(c *ui.Context, p palette) {
 		}
 		if a.selection != nil {
 			path, origPath = a.selection.Path, a.selection.OrigPath
-			// Editable only while no write or reload is in flight: hunk
-			// indices are relative to the patch that is on screen.
+			// Editable only while no write, reload or network operation is in
+			// flight: hunk indices are relative to the patch on screen, and a
+			// pull would rewrite that patch under the buttons.
 			editable = !a.selection.Untracked && !a.selection.Conflicted &&
-				a.selection.OrigPath == "" && !a.writing &&
+				a.selection.OrigPath == "" && !a.busy() &&
 				!a.loadingStatus && !a.loadingDiff
 		}
 		res, has, patch = a.diff, a.hasDiff, a.worktreePatch

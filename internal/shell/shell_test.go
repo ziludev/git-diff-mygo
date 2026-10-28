@@ -219,6 +219,40 @@ func TestHistoryRowShowsColumns(t *testing.T) {
 	}
 }
 
+func TestToolbarShowsSyncButtons(t *testing.T) {
+	app := historyTestApp()
+	app.status.Branch = gitx.Branch{Head: "main", OID: "abc"}
+	tt := ui.NewTester(app.View, 1100, 720)
+	for _, want := range []string{"Fetch", "Pull", "Push"} {
+		if !tt.HasText(want) {
+			t.Fatalf("missing %q in %q", want, tt.Texts())
+		}
+	}
+
+	// While one runs, the toolbar names it instead of saying "Refreshing…",
+	// even when a status reload is in flight too.
+	app.syncing, app.syncOp, app.loadingStatus = true, "pull", true
+	tt.Frame()
+	if !tt.HasText("Pulling…") || tt.HasText("Refreshing…") {
+		t.Fatalf("busy label texts = %q", tt.Texts())
+	}
+}
+
+func TestPullNeedsABranch(t *testing.T) {
+	app := historyTestApp()
+	app.status.Branch = gitx.Branch{Detached: true, OID: "abc"}
+	app.pullRemote()
+	if app.syncing {
+		t.Fatal("pull started on a detached HEAD")
+	}
+
+	app.status.Branch = gitx.Branch{Head: "main"} // unborn
+	app.pushRemote()
+	if app.syncing {
+		t.Fatal("push started on an unborn branch")
+	}
+}
+
 func TestHistoryDetailsAboveFiles(t *testing.T) {
 	app := historyTestApp()
 	app.selectedCommit = &app.commits[0]

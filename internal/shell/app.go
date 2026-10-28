@@ -22,6 +22,11 @@ import (
 // historyPage is one page of the commit list; "load older" appends the next.
 const historyPage = 100
 
+// syncTimeout bounds one network operation. A credential helper or a network
+// black hole must not disable writes forever: git is killed when it expires,
+// and the user can retry.
+const syncTimeout = 5 * time.Minute
+
 // View is the left sidebar's tab.
 type View int
 
@@ -53,6 +58,16 @@ type App struct {
 	loadingDiff   bool
 	writing       bool
 	errorText     string
+
+	// syncing is the remote operation in flight ("fetch", "pull" or "push"),
+	// "" when none. One at a time: they touch the same refs, and pull and push
+	// also rewrite the worktree and the remote. A sync also blocks worktree
+	// writes, so a commit cannot capture a half-pulled worktree.
+	syncing bool
+	syncOp  string
+	// syncCancel stops the git process behind the slot, so opening another
+	// repository does not leave it racing the next operation.
+	syncCancel context.CancelFunc
 
 	view           View
 	commits        []gitx.Commit
@@ -125,6 +140,7 @@ type epochs struct {
 	body       atomic.Uint64
 	commitDiff atomic.Uint64
 	branches   atomic.Uint64
+	sync       atomic.Uint64
 }
 
 type confirmation struct {
@@ -284,8 +300,15 @@ func (a *App) loadDiff(ch gitx.Change) {
 func (a *App) resetRepoState(root string) {
 	a.epochs.commits.Add(1)
 	a.epochs.branches.Add(1)
+	a.epochs.sync.Add(1)
 	a.loadingCommits = false
 	a.loadingBranches = false
+	if a.syncCancel != nil {
+		a.syncCancel()
+		a.syncCancel = nil
+	}
+	a.syncing = false
+	a.syncOp = ""
 	a.status = gitx.NewStatus(root)
 	a.resetDiff()
 	a.resetCommitSelection()
@@ -313,9 +336,11 @@ func (a *App) resetDiff() {
 }
 
 // write serializes one index or worktree write, then refreshes. A failure is
-// a toast: it should not replace the diff with an error page.
+// a toast: it should not replace the diff with an error page. A network
+// operation in flight blocks writes: a pull would otherwise race a commit on
+// the same index and worktree.
 func (a *App) write(run func() error) {
-	if a.writing {
+	if a.busy() {
 		return
 	}
 	a.writing = true
@@ -395,6 +420,73 @@ func (a *App) commit() {
 		})
 	}()
 }
+
+// fetchRemote, pullRemote and pushRemote share one slot: a second operation
+// could race the first on the same refs. The view is refreshed even when the
+// operation fails: a pull fetches before it fast-forwards, so its fetch half
+// can have moved remote-tracking refs before the merge half refused.
+func (a *App) fetchRemote() { a.syncRemote("fetch", a.svc.Fetch) }
+func (a *App) pullRemote()  { a.syncRemote("pull", a.svc.Pull) }
+func (a *App) pushRemote()  { a.syncRemote("push", a.svc.Push) }
+
+func (a *App) syncRemote(op string, run func(context.Context) error) {
+	if a.busy() || a.status.Root == "" {
+		return
+	}
+	// The Git menu bypasses the toolbar's disabled buttons; pull and push
+	// still need a branch with a commit to work on.
+	if op != "fetch" && !a.hasSyncBranch() {
+		return
+	}
+	root := a.status.Root
+	epoch := a.epochs.sync.Add(1)
+	ctx, cancel := context.WithTimeout(context.Background(), syncTimeout)
+	a.syncing = true
+	a.syncOp = op
+	a.syncCancel = cancel
+	go func() {
+		err := run(ctx)
+		a.apply(func() {
+			if epoch != a.epochs.sync.Load() || a.status.Root != root {
+				// A repository switch cancelled the operation and cleared the
+				// slot; the new repository's own loads show its state.
+				return
+			}
+			if err != nil && ctx.Err() != nil {
+				// git was killed by the timeout; its "signal: killed" says
+				// nothing to the user.
+				err = fmt.Errorf("%s stopped after %s; check the network or your credentials",
+					op, syncTimeout)
+			}
+			cancel()
+			a.syncing = false
+			a.syncOp = ""
+			a.syncCancel = nil
+			a.refresh("")
+			if err != nil {
+				log.Printf("shell: %s failed: %v", op, err)
+				a.showError(err)
+			}
+		})
+	}()
+}
+
+// busy reports whether a worktree write or a network operation runs. Both
+// change the index, the worktree or the refs, so they share one slot.
+func (a *App) busy() bool { return a.writing || a.syncing }
+
+// hasSyncBranch reports whether pull and push have a branch to work on: a
+// detached HEAD and an unborn branch do not.
+func (a *App) hasSyncBranch() bool {
+	b := a.status.Branch
+	return b.Head != "" && !b.Detached && b.OID != ""
+}
+
+// The Git menu calls the toolbar's operations. apply posts to the main thread,
+// where the sync slot lives.
+func (a *App) FetchFromMenu() { a.apply(a.fetchRemote) }
+func (a *App) PullFromMenu()  { a.apply(a.pullRemote) }
+func (a *App) PushFromMenu()  { a.apply(a.pushRemote) }
 
 // loadCommits reads one page; more appends the next page. A page always
 // replaces the list from the top so a newer commit cannot shift an older
@@ -636,7 +728,7 @@ func (a *App) deleteBranch(name string) {
 
 // canCommit mirrors the commit panel's disabled rules.
 func (a *App) canCommit() bool {
-	return !a.writing && strings.TrimSpace(a.message) != "" &&
+	return !a.busy() && strings.TrimSpace(a.message) != "" &&
 		(a.amend || len(a.status.Staged) > 0)
 }
 

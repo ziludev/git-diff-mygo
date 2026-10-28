@@ -4,6 +4,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"path/filepath"
 	"sync"
@@ -199,6 +200,21 @@ func (s *RepoService) CommitDiff(ctx context.Context, req gitx.CommitDiffRequest
 	return r.CommitDiff(ctx, req)
 }
 
+// Fetch updates the remote-tracking refs and prunes deleted ones.
+func (s *RepoService) Fetch(ctx context.Context) error {
+	return s.mutate(ctx, "fetch", "", func(r *gitx.Runner) error { return r.Fetch(ctx) })
+}
+
+// Pull fast-forwards the current branch to its upstream.
+func (s *RepoService) Pull(ctx context.Context) error {
+	return s.mutate(ctx, "pull", "", func(r *gitx.Runner) error { return r.Pull(ctx) })
+}
+
+// Push publishes the current branch to its upstream.
+func (s *RepoService) Push(ctx context.Context) error {
+	return s.mutate(ctx, "push", "", func(r *gitx.Runner) error { return r.Push(ctx) })
+}
+
 // Branches lists local branches for the branch switcher.
 func (s *RepoService) Branches(ctx context.Context) ([]gitx.BranchEntry, error) {
 	r, err := s.runner()
@@ -267,22 +283,27 @@ func (s *RepoService) Discard(ctx context.Context, path string) error {
 	return s.mutate(ctx, "discard", path, func(r *gitx.Runner) error { return r.Discard(ctx, path) })
 }
 
-// mutate runs one worktree write and logs its outcome. markOperation keeps the
-// watcher from turning our own write into a second refresh.
+// mutate runs one repository operation and logs its outcome. It is not only
+// for worktree writes: fetch, pull and push share the self-write window too, so
+// the watcher does not turn their ref changes into a second refresh.
 func (s *RepoService) mutate(ctx context.Context, op, path string, run func(*gitx.Runner) error) error {
 	r, err := s.runner()
 	if err != nil {
 		return err
 	}
+	what := op
+	if path != "" {
+		what = fmt.Sprintf("%s %q", op, path)
+	}
 	if err := run(r); err != nil {
-		log.Printf("service: %s %q failed: %v", op, path, err)
+		log.Printf("service: %s failed: %v", what, err)
 		return err
 	}
 	// Start the self-write window when the command finishes: the watcher
-	// echo follows the write, not its start, and a long apply must not let
-	// its own echo through.
+	// echo follows the write, not its start, and a long operation must not
+	// let its own echo through.
 	s.markOperation()
-	log.Printf("service: %s %q", op, path)
+	log.Printf("service: %s", what)
 	return nil
 }
 

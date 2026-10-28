@@ -127,10 +127,14 @@ func (a *App) toolbar(c *ui.Context, p palette) {
 		if hasRepo {
 			ui.Text(c, repoName(a.status.Root)).FontSize(12).TextColor(t.TextMuted)
 			ui.Spacer(c)
-			if a.loadingStatus {
+			switch {
+			case a.syncing:
+				ui.Text(c, syncText(a.syncOp)).FontSize(11).TextColor(t.TextMuted)
+			case a.loadingStatus:
 				ui.Text(c, "Refreshing…").FontSize(11).TextColor(t.TextMuted)
 			}
 			a.branchChip(c, p)
+			a.syncButtons(c)
 		} else {
 			ui.Spacer(c)
 		}
@@ -145,6 +149,44 @@ func (a *App) toolbar(c *ui.Context, p palette) {
 		})
 		open := ui.PrimaryButton(c, "Open Repository")
 		open.Height(26).FontSize(12).OnClick(a.openPicker)
+	})
+}
+
+// syncText is the toolbar's label while a network operation runs.
+func syncText(op string) string {
+	switch op {
+	case "fetch":
+		return "Fetching…"
+	case "pull":
+		return "Pulling…"
+	case "push":
+		return "Pushing…"
+	}
+	return "Syncing…"
+}
+
+// syncButtons draws Fetch, Pull and Push. They share one slot, so all three
+// are disabled while any of them runs or a worktree write is in flight; pull
+// and push also need a checked-out branch with a commit, which a detached HEAD
+// and an unborn branch do not have.
+func (a *App) syncButtons(c *ui.Context) {
+	branch := a.hasSyncBranch()
+	busy := a.busy()
+	ui.Row(c).Shrink(0).Gap(4).Children(func() {
+		for _, op := range []struct {
+			label   string
+			tooltip string
+			enabled bool
+			run     func()
+		}{
+			{"Fetch", "Fetch from the remote and prune deleted refs", true, a.fetchRemote},
+			{"Pull", "Fast-forward the current branch from its upstream", branch, a.pullRemote},
+			{"Push", "Push the current branch to its upstream", branch, a.pushRemote},
+		} {
+			btn := ui.Button(c, op.label).Height(26).FontSize(11).
+				Disabled(busy || !op.enabled).Tooltip(op.tooltip)
+			btn.OnClick(op.run)
+		}
 	})
 }
 

@@ -103,14 +103,16 @@ func (a *App) changeRow(c *ui.Context, p palette, ch gitx.Change) {
 		left.OnClick(func() { a.loadDiff(ch) })
 
 		ui.Row(c).Shrink(0).Gap(2).Children(func() {
+			// A remote operation blocks writes too, so its buttons disable with
+			// the same flag instead of silently doing nothing.
 			if !ch.Staged && !ch.Conflicted {
-				iconButton(c, "+", "Stage", a.writing, func() { a.stage(ch) })
+				iconButton(c, "+", "Stage", a.busy(), func() { a.stage(ch) })
 			}
 			if ch.Staged {
-				iconButton(c, "−", "Unstage", a.writing, func() { a.unstage(ch) })
+				iconButton(c, "−", "Unstage", a.busy(), func() { a.unstage(ch) })
 			}
 			if !ch.Staged && !ch.Untracked && !ch.Conflicted {
-				iconButton(c, "↺", "Discard changes", a.writing, func() { a.discard(ch) })
+				iconButton(c, "↺", "Discard changes", a.busy(), func() { a.discard(ch) })
 			}
 		})
 	})

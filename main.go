@@ -68,6 +68,22 @@ func main() {
 				mygo.Separator(),
 				{Role: mygo.RoleClose},
 			}},
+			// Remote operations mirror the toolbar; the app decides whether
+			// one is allowed (a branch, no operation in flight).
+			{Label: "Git", Submenu: []*mygo.MenuItem{
+				{
+					Label: "Fetch",
+					Click: func(*mygo.MenuItem, *mygo.Window) { app.FetchFromMenu() },
+				},
+				{
+					Label: "Pull",
+					Click: func(*mygo.MenuItem, *mygo.Window) { app.PullFromMenu() },
+				},
+				{
+					Label: "Push",
+					Click: func(*mygo.MenuItem, *mygo.Window) { app.PushFromMenu() },
+				},
+			}},
 			{Role: mygo.RoleEditMenu},
 			{Role: mygo.RoleViewMenu},
 			{Role: mygo.RoleWindowMenu},
