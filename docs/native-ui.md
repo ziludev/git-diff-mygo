@@ -1,7 +1,7 @@
 # Native UI migration
 
-Status: M1–M4 implemented and verified on `feature/native-ui` (2026-10-28);
-M5 (removing the web frontend) is waiting for confirmation.
+Status: M1–M5 complete on `feature/native-ui` (2026-10-28). The React
+frontend is removed; the app builds and runs from Go alone.
 
 ## Why
 
@@ -12,14 +12,15 @@ also has a native UI path — `github.com/egoist/mygo/ui` — which draws the
 window on the GPU from a Go view function; the author's terminal app (`kero`)
 is built that way, with TypeScript left to its website.
 
-This branch moves Twill to that path: one language, no Bun/Vite build, no
-node_modules, and a view that is a plain Go function of app state.
+This branch moves Twill to that path: one language, no Vite/TypeScript build,
+no frontend dependencies (node_modules holds only the `mygo-cli` wrapper that
+invokes the Go build), and a view that is a plain Go function of app state.
 
 ## Target architecture
 
 ```
 main.go                  window, menu, startup open
-internal/gitx            unchanged: the only package that starts git
+internal/gitx            the only package that starts git
 internal/service         repository actions + watcher + last-repo state,
                          called directly (no mygo.Bind, no typed events)
 internal/shell           UI state, async loaders, view functions,
@@ -81,8 +82,8 @@ internal/shell           UI state, async loaders, view functions,
 5. **Remove the web frontend** — delete `src/`, `index.html`, `vite.config.ts`,
    `tsconfig.json`, `components.json`, the web dependencies and lockfile, and
    update README and docs. The app must still build a signed `.app` and `.dmg`.
-   A minimal `package.json` keeps `mygo-cli` so `bun run build` still works;
-   the generated TypeScript client disappears with `src/`.
+   **Done:** a minimal `package.json` keeps `mygo-cli` so `bun run build` still
+   works; the generated TypeScript client disappeared with `src/`.
 
 ## Verification (2026-10-28)
 
@@ -93,7 +94,9 @@ Checked in the packaged app against a demo repository:
 - history expand, file list, per-file patch, lane graph and ref chips;
 - branch list, checkout by row click, create from the inline field, delete
   with the confirmation dialog;
-- screen refresh after an external file edit (watcher), startup restore.
+- screen refresh after an external file edit (watcher), startup restore;
+- `bun run build` after `src/` was deleted: signed `.app` and `.dmg` still
+  produced (the build no longer runs a frontend step).
 
 Keyboard: Cmd+1/2/3 switch Changes/History/Branches, Cmd+O opens the repository
 picker, Cmd+Enter commits (including from the focused message field).

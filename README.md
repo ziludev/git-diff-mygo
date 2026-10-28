@@ -6,9 +6,9 @@ repository operation runs in the same process: no web view, no TypeScript
 bindings. The name comes from twill, a weave whose diagonal threads run like
 the lanes of the commit graph.
 
-Status: native UI milestone M4 — browse changes, stage/unstage/discard whole
-files and single hunks, commit, read the repository history with a colored
-lane graph, branch and tag labels, changed files and per-file patches,
+Status: feature-complete for daily use — browse changes, stage/unstage/discard
+whole files and single hunks, commit, read the repository history with a
+colored lane graph, branch and tag labels, changed files and per-file patches,
 switch/create/delete local branches, and reopen the last repository on launch.
 History actions (cherry-pick, reset) come next.
 
@@ -45,9 +45,7 @@ build/darwin-arm64/Twill.app/Contents/MacOS/Twill ~/code/some-repo
 | `docs/history.md` | history view design: commands, state, edge cases |
 | `docs/branches.md` | branch switcher design: commands, actions, edge cases |
 | `docs/session.md` | last-repository restore: state file, atomic write, edge cases |
-
-The old React frontend still sits in `src/` (with `index.html` and the Vite
-configs) until it is removed; nothing loads it any more.
+| `package.json` | only `mygo-cli`; the app has no JavaScript dependencies |
 
 ## Tests
 
