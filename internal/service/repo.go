@@ -11,7 +11,7 @@ import (
 
 	"github.com/egoist/mygo"
 
-	"git-diff-mygo/internal/gitx"
+	"twill/internal/gitx"
 )
 
 // RepoChange is sent to the page when the open repository may have changed.
@@ -27,10 +27,11 @@ var RepoChanged = mygo.NewEvent[RepoChange]("repo-changed")
 
 // RepoService is bound to the frontend as `RepoService`.
 type RepoService struct {
-	mu     sync.Mutex
-	root   string
-	win    *mygo.Window
-	lastOp time.Time
+	mu       sync.Mutex
+	root     string
+	win      *mygo.Window
+	lastOp   time.Time
+	onChange func(root, reason string)
 
 	watchMu      sync.Mutex
 	watchCancel  context.CancelFunc
@@ -48,6 +49,15 @@ func Attach(s *RepoService, w *mygo.Window) {
 	s.mu.Unlock()
 }
 
+// OnChange sets the callback for native UI windows: it runs on a background
+// goroutine whenever the open repository may have changed, and replaces the
+// repo-changed event the web page listens for. nil restores the event.
+func (s *RepoService) OnChange(fn func(root, reason string)) {
+	s.mu.Lock()
+	s.onChange = fn
+	s.mu.Unlock()
+}
+
 // Open opens the repository at path, asking the user when path is empty.
 func (s *RepoService) Open(ctx context.Context, path string) (gitx.Status, error) {
 	return s.open(ctx, path, mygo.CallerWindow(ctx))
@@ -61,12 +71,12 @@ type MenuActions struct{ s *RepoService }
 func NewMenuActions(s *RepoService) *MenuActions { return &MenuActions{s: s} }
 
 // OpenFromMenu opens the repository picker.
-func (m *MenuActions) OpenFromMenu() { m.s.openAndNotify("") }
+func (m *MenuActions) OpenFromMenu() { m.s.openPath("", false) }
 
 // OpenDropped opens a repository (or a file inside one) dropped on the
 // window. The page cannot see absolute paths of dropped files, so the
 // window's Go side handles the drop.
-func (m *MenuActions) OpenDropped(path string) { m.s.openAndNotify(path) }
+func (m *MenuActions) OpenDropped(path string) { m.s.openPath(path, false) }
 
 // RefreshFromMenu asks the page to refresh.
 func (m *MenuActions) RefreshFromMenu() {
@@ -75,13 +85,18 @@ func (m *MenuActions) RefreshFromMenu() {
 	}
 }
 
-func (s *RepoService) openAndNotify(path string) {
+// openPath opens path in the background, asking the user when path is empty,
+// and notifies the page. quiet logs a failure instead of showing a dialog,
+// which is what the silent startup restore needs.
+func (s *RepoService) openPath(path string, quiet bool) {
 	go func() {
 		root, err := s.activate(context.Background(), path, s.window())
 		if err != nil {
 			log.Printf("service: open %q failed: %v", path, err)
-			if w := s.window(); w != nil {
-				mygo.Dialog.Error("Open Repository", err.Error())
+			if !quiet {
+				if w := s.window(); w != nil {
+					mygo.Dialog.Error("Open Repository", err.Error())
+				}
 			}
 			return
 		}
@@ -128,6 +143,63 @@ func (s *RepoService) ApplyHunks(ctx context.Context, req gitx.ApplyRequest) err
 			log.Printf("service: applied %d hunk(s) to %q (op=%s)", len(req.Hunks), req.Path, req.Op)
 		}
 		return nil
+	})
+}
+
+// History returns one page of the commits reachable from HEAD, newest first.
+func (s *RepoService) History(ctx context.Context, req gitx.LogRequest) ([]gitx.Commit, error) {
+	r, err := s.runner()
+	if err != nil {
+		return []gitx.Commit{}, err
+	}
+	return r.Log(ctx, req)
+}
+
+// CommitFiles lists the files one commit changed, against its first parent.
+func (s *RepoService) CommitFiles(ctx context.Context, oid string) ([]gitx.FileEntry, error) {
+	r, err := s.runner()
+	if err != nil {
+		return []gitx.FileEntry{}, err
+	}
+	return r.CommitFiles(ctx, oid)
+}
+
+// CommitDiff returns one file's patch inside a commit.
+func (s *RepoService) CommitDiff(ctx context.Context, req gitx.CommitDiffRequest) (gitx.DiffResult, error) {
+	r, err := s.runner()
+	if err != nil {
+		return gitx.DiffResult{}, err
+	}
+	return r.CommitDiff(ctx, req)
+}
+
+// Branches lists local branches for the branch switcher.
+func (s *RepoService) Branches(ctx context.Context) ([]gitx.BranchEntry, error) {
+	r, err := s.runner()
+	if err != nil {
+		return []gitx.BranchEntry{}, err
+	}
+	return r.Branches(ctx)
+}
+
+// CheckoutBranch switches the work tree to a local branch.
+func (s *RepoService) CheckoutBranch(ctx context.Context, name string) error {
+	return s.mutate(ctx, "checkout", name, func(r *gitx.Runner) error {
+		return r.CheckoutBranch(ctx, name)
+	})
+}
+
+// CreateBranch creates a branch at HEAD and checks it out.
+func (s *RepoService) CreateBranch(ctx context.Context, name string) error {
+	return s.mutate(ctx, "create branch", name, func(r *gitx.Runner) error {
+		return r.CreateBranch(ctx, name)
+	})
+}
+
+// DeleteBranch removes a branch whose commits are merged elsewhere.
+func (s *RepoService) DeleteBranch(ctx context.Context, name string) error {
+	return s.mutate(ctx, "delete branch", name, func(r *gitx.Runner) error {
+		return r.DeleteBranch(ctx, name)
 	})
 }
 
@@ -235,6 +307,7 @@ func (s *RepoService) activate(ctx context.Context, path string, parent *mygo.Wi
 	s.root = root
 	s.mu.Unlock()
 	log.Printf("service: opened repository at %s", root)
+	saveLastRepo(root)
 
 	// Watching walks the tree, so it must not delay the first status.
 	go s.startWatch(root)
@@ -248,6 +321,13 @@ func (s *RepoService) window() *mygo.Window {
 }
 
 func (s *RepoService) notify(root, reason string) {
+	s.mu.Lock()
+	cb := s.onChange
+	s.mu.Unlock()
+	if cb != nil {
+		cb(root, reason)
+		return
+	}
 	if w := s.window(); w != nil {
 		_ = RepoChanged.Emit(w, RepoChange{Root: root, Reason: reason})
 	}
