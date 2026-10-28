@@ -1,5 +1,5 @@
-// git-diff-mygo is a Git client whose window is a React page in the OS
-// webview and whose repository work happens in Go through MyGo bindings.
+// Twill is a Git client drawn by MyGo's native UI; repository work happens in
+// Go and the window is a view function, with no web page.
 package main
 
 import (
@@ -7,26 +7,29 @@ import (
 	"os"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
 
-	"git-diff-mygo/internal/service"
+	"twill/internal/service"
+	"twill/internal/shell"
 )
 
 func main() {
 	repo := &service.RepoService{}
-	mygo.Bind(repo)
 	actions := service.NewMenuActions(repo)
+	app := shell.New(repo, actions)
 
 	mygo.App.WhenReady(func() {
 		win := mygo.NewWindow(mygo.WindowOptions{
-			Title:           "Git Diff",
+			Title:           "Twill",
 			Width:           1360,
 			Height:          840,
 			MinWidth:        960,
 			MinHeight:       600,
 			BackgroundColor: "light-dark(#ffffff, #0b0b0c)",
 			StateKey:        "main",
-			URL:             "/",
+			Content:         ui.View(app.View),
 		})
+		app.Attach(win)
 		service.Attach(repo, win)
 
 		// Dropping a folder (or any file inside a repository) opens it.
@@ -37,10 +40,13 @@ func main() {
 		})
 
 		// A path on the command line opens that repository at startup, which
-		// also makes "Open With" and scripted launches work.
+		// also makes "Open With" and scripted launches work. Without one, the
+		// repository from the previous session comes back.
+		arg := ""
 		if len(os.Args) > 1 {
-			actions.OpenDropped(os.Args[1])
+			arg = os.Args[1]
 		}
+		service.OpenInitial(repo, arg)
 
 		mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
 			{Role: mygo.RoleAppMenu},

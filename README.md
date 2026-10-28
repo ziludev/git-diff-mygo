@@ -1,29 +1,35 @@
-# Git Diff (MyGo)
+# Twill
 
-A Git client in the spirit of IDEA's diff viewer: the window is a React page in
-the OS webview, and every repository operation runs in Go through MyGo bindings.
+A Git history and diff viewer in the spirit of IDEA's diff viewer. The window
+is drawn natively from Go with `github.com/egoist/mygo/ui`, and every
+repository operation runs in the same process: no web view, no TypeScript
+bindings. The name comes from twill, a weave whose diagonal threads run like
+the lanes of the commit graph.
 
-Status: M0 — browse changes, stage/unstage/discard whole files and single
-hunks, and commit. History, branches and the commit graph come next.
+Status: native UI milestone M4 — browse changes, stage/unstage/discard whole
+files and single hunks, commit, read the repository history with a colored
+lane graph, branch and tag labels, changed files and per-file patches,
+switch/create/delete local branches, and reopen the last repository on launch.
+History actions (cherry-pick, reset) come next.
 
 ## Requirements
 
 - Go 1.27+
-- Bun
+- Bun (only to run the `mygo-cli` build wrapper)
 - `git` 2.25+ on `PATH`
 
 ## Run
 
 ```bash
 bun install
-bun run dev          # mygo dev: Vite dev server + native window
-bun run build        # mygo build: signed .app / .dmg with embedded assets
+bun run dev          # mygo dev: builds and starts the native window
+bun run build        # mygo build: signed .app / .dmg
 ```
 
 The packaged binary opens a repository given as its first argument:
 
 ```bash
-build/darwin-arm64/git-diff-mygo.app/Contents/MacOS/git-diff-mygo ~/code/some-repo
+build/darwin-arm64/Twill.app/Contents/MacOS/Twill ~/code/some-repo
 ```
 
 ## Layout
@@ -32,16 +38,23 @@ build/darwin-arm64/git-diff-mygo.app/Contents/MacOS/git-diff-mygo ~/code/some-re
 |---|---|
 | `main.go` | window, native menu, file drops, CLI argument |
 | `internal/gitx` | the only package that starts `git`; porcelain v2 parsing, diffs, hunk apply, worktree writes |
-| `internal/service` | bound `RepoService` for the page, change watcher, menu actions |
-| `src/` | React UI: Zustand store, changes panel, diff panel, shadcn components |
-| `src/mygo.ts` | generated TypeScript client — run `bun run generate` after changing bound methods |
+| `internal/service` | repository actions, change watcher, last-repository state, menu actions |
+| `internal/shell` | native UI state, async loaders, view functions, commit graph and patch parser |
+| `assets/icon.svg` | app icon: three diagonal lanes woven as twill; `resources/icon.png` is its rasterization |
+| `docs/native-ui.md` | native UI migration plan, verification notes and known gaps |
+| `docs/history.md` | history view design: commands, state, edge cases |
+| `docs/branches.md` | branch switcher design: commands, actions, edge cases |
+| `docs/session.md` | last-repository restore: state file, atomic write, edge cases |
+
+The old React frontend still sits in `src/` (with `index.html` and the Vite
+configs) until it is removed; nothing loads it any more.
 
 ## Tests
 
 ```bash
 go test ./...
-bun run typecheck
 ```
 
 `internal/gitx` tests use real temporary repositories for the apply paths, so
 partial staging, unstaging and discarding are checked against git itself.
+`internal/shell` tests drive the view through `ui.NewTester`.
