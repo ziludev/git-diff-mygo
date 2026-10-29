@@ -9,8 +9,9 @@ the lanes of the commit graph.
 Status: feature-complete for daily use — browse changes, stage/unstage/discard
 whole files and single hunks, commit, read the repository history with a
 colored lane graph, branch and tag labels, changed files and per-file patches,
-switch/create/delete local branches, and reopen the last repository on launch.
-History actions (cherry-pick, reset) come next.
+switch/create/delete local branches and check out remote ones, and reopen the
+last repository on launch.
+Stash, conflict editing and a pull strategy come next.
 
 ## Requirements
 
@@ -44,6 +45,9 @@ build/darwin-arm64/Twill.app/Contents/MacOS/Twill ~/code/some-repo
 | `docs/native-ui.md` | native UI migration plan, verification notes and known gaps |
 | `docs/history.md` | history view design: commands, state, edge cases |
 | `docs/branches.md` | branch switcher design: commands, actions, edge cases |
+| `docs/git-ux.md` | IDEA-style UX plan: icons, branch popover and trees by batch |
+| `docs/stash.md` | stash tab: commands, apply/pop/drop, edge cases |
+| `docs/keyboard.md` | list keys: arrows, Space to stage, Cmd+F, edge cases |
 | `docs/session.md` | last-repository restore: state file, atomic write, edge cases |
 | `package.json` | only `mygo-cli`; the app has no JavaScript dependencies |
 

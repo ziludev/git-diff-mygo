@@ -215,7 +215,23 @@ func (s *RepoService) Push(ctx context.Context) error {
 	return s.mutate(ctx, "push", "", func(r *gitx.Runner) error { return r.Push(ctx) })
 }
 
-// Branches lists local branches for the branch switcher.
+// Outgoing reads what a push of the current branch would publish.
+func (s *RepoService) Outgoing(ctx context.Context) (gitx.OutgoingPlan, error) {
+	r, err := s.runner()
+	if err != nil {
+		return gitx.OutgoingPlan{}, err
+	}
+	return r.Outgoing(ctx)
+}
+
+// Publish pushes a branch to a remote and sets it as the upstream.
+func (s *RepoService) Publish(ctx context.Context, remote, branch string) error {
+	return s.mutate(ctx, "publish "+branch, remote, func(r *gitx.Runner) error {
+		return r.PushBranch(ctx, remote, branch)
+	})
+}
+
+// Branches lists local and remote-tracking branches for the branch switcher.
 func (s *RepoService) Branches(ctx context.Context) ([]gitx.BranchEntry, error) {
 	r, err := s.runner()
 	if err != nil {
@@ -228,6 +244,14 @@ func (s *RepoService) Branches(ctx context.Context) ([]gitx.BranchEntry, error) 
 func (s *RepoService) CheckoutBranch(ctx context.Context, name string) error {
 	return s.mutate(ctx, "checkout", name, func(r *gitx.Runner) error {
 		return r.CheckoutBranch(ctx, name)
+	})
+}
+
+// CheckoutRemoteBranch creates a local tracking branch from a remote-tracking
+// one and checks it out.
+func (s *RepoService) CheckoutRemoteBranch(ctx context.Context, name string) error {
+	return s.mutate(ctx, "checkout remote", name, func(r *gitx.Runner) error {
+		return r.CheckoutRemoteBranch(ctx, name)
 	})
 }
 
@@ -245,6 +269,79 @@ func (s *RepoService) DeleteBranch(ctx context.Context, name string) error {
 	})
 }
 
+// CheckoutRevision detaches HEAD at a commit.
+func (s *RepoService) CheckoutRevision(ctx context.Context, oid string) error {
+	return s.mutate(ctx, "checkout revision", oid, func(r *gitx.Runner) error {
+		return r.CheckoutRevision(ctx, oid)
+	})
+}
+
+// CreateBranchAt creates a branch at a commit and checks it out.
+func (s *RepoService) CreateBranchAt(ctx context.Context, name, oid string) error {
+	return s.mutate(ctx, "create branch at "+oid, name, func(r *gitx.Runner) error {
+		return r.CreateBranchAt(ctx, name, oid)
+	})
+}
+
+// Tag creates a lightweight tag at a commit.
+func (s *RepoService) Tag(ctx context.Context, name, oid string) error {
+	return s.mutate(ctx, "tag "+oid, name, func(r *gitx.Runner) error {
+		return r.Tag(ctx, name, oid)
+	})
+}
+
+// CherryPick applies a commit onto the current branch; a conflict is aborted.
+func (s *RepoService) CherryPick(ctx context.Context, oid string) error {
+	return s.mutate(ctx, "cherry-pick", oid, func(r *gitx.Runner) error {
+		return r.CherryPick(ctx, oid)
+	})
+}
+
+// Revert adds a commit that undoes oid; a conflict is aborted.
+func (s *RepoService) Revert(ctx context.Context, oid string) error {
+	return s.mutate(ctx, "revert", oid, func(r *gitx.Runner) error {
+		return r.Revert(ctx, oid)
+	})
+}
+
+// Reset moves the current branch to a commit.
+func (s *RepoService) Reset(ctx context.Context, oid string, mode gitx.ResetMode) error {
+	return s.mutate(ctx, "reset --"+string(mode), oid, func(r *gitx.Runner) error {
+		return r.Reset(ctx, oid, mode)
+	})
+}
+
+// Stashes lists the stashes, newest first.
+func (s *RepoService) Stashes(ctx context.Context) ([]gitx.StashEntry, error) {
+	r, err := s.runner()
+	if err != nil {
+		return []gitx.StashEntry{}, err
+	}
+	return r.Stashes(ctx)
+}
+
+// StashPush puts the uncommitted changes aside.
+func (s *RepoService) StashPush(ctx context.Context, message string, untracked bool) error {
+	return s.mutate(ctx, "stash", message, func(r *gitx.Runner) error {
+		return r.StashPush(ctx, message, untracked)
+	})
+}
+
+// StashApply puts a stash's changes back and keeps the stash.
+func (s *RepoService) StashApply(ctx context.Context, oid string) error {
+	return s.mutate(ctx, "stash apply", oid, func(r *gitx.Runner) error { return r.StashApply(ctx, oid) })
+}
+
+// StashPop applies a stash and drops it after a clean apply.
+func (s *RepoService) StashPop(ctx context.Context, oid string) error {
+	return s.mutate(ctx, "stash pop", oid, func(r *gitx.Runner) error { return r.StashPop(ctx, oid) })
+}
+
+// StashDrop removes a stash.
+func (s *RepoService) StashDrop(ctx context.Context, oid string) error {
+	return s.mutate(ctx, "stash drop", oid, func(r *gitx.Runner) error { return r.StashDrop(ctx, oid) })
+}
+
 // Stage adds one path to the index.
 func (s *RepoService) Stage(ctx context.Context, path string) error {
 	return s.mutate(ctx, "stage", path, func(r *gitx.Runner) error { return r.Stage(ctx, path) })
@@ -255,6 +352,20 @@ func (s *RepoService) Stage(ctx context.Context, path string) error {
 func (s *RepoService) Unstage(ctx context.Context, path, origPath string) error {
 	return s.mutate(ctx, "unstage", path, func(r *gitx.Runner) error {
 		return r.Unstage(ctx, gitx.Paths(path, origPath)...)
+	})
+}
+
+// StagePaths adds many paths to the index in one call.
+func (s *RepoService) StagePaths(ctx context.Context, paths []string) error {
+	return s.mutate(ctx, "stage files", fmt.Sprintf("%d files", len(paths)), func(r *gitx.Runner) error {
+		return r.StagePaths(ctx, paths)
+	})
+}
+
+// UnstagePaths removes many paths from the index in one call.
+func (s *RepoService) UnstagePaths(ctx context.Context, paths []string) error {
+	return s.mutate(ctx, "unstage files", fmt.Sprintf("%d files", len(paths)), func(r *gitx.Runner) error {
+		return r.UnstagePaths(ctx, paths)
 	})
 }
 

@@ -223,7 +223,9 @@ func (r *Runner) Stage(ctx context.Context, paths ...string) error {
 	if len(paths) == 0 {
 		return errors.New("no paths")
 	}
-	args := append([]string{"add", "--"}, paths...)
+	// --literal-pathspecs: a path from the status may contain glob characters,
+	// and it must match that one file, not a pattern.
+	args := append([]string{"--literal-pathspecs", "add", "--"}, paths...)
 	_, err := r.Run(ctx, args...)
 	return err
 }
@@ -235,12 +237,48 @@ func (r *Runner) Unstage(ctx context.Context, paths ...string) error {
 	}
 	if !r.HeadExists(ctx) {
 		// Unborn branch: there is no HEAD to reset to.
-		args := append([]string{"rm", "--cached", "-r", "--"}, paths...)
+		args := append([]string{"--literal-pathspecs", "rm", "--cached", "-r", "--"}, paths...)
 		_, err := r.Run(ctx, args...)
 		return err
 	}
-	args := append([]string{"reset", "-q", "HEAD", "--"}, paths...)
+	args := append([]string{"--literal-pathspecs", "reset", "-q", "HEAD", "--"}, paths...)
 	_, err := r.Run(ctx, args...)
+	return err
+}
+
+// StagePaths adds many paths to the index in one call. The list goes on stdin
+// rather than the command line, so a folder of thousands of files cannot
+// overflow the argument limit, and the paths are literal: a file named
+// "*.go" or ":(top)x" is that file, not a pattern.
+func (r *Runner) StagePaths(ctx context.Context, paths []string) error {
+	return r.runPathList(ctx, paths, "add")
+}
+
+// UnstagePaths removes many paths from the index in one call, keeping their
+// worktree content. Rename rows pass both sides; see StagePaths for how the
+// list travels.
+func (r *Runner) UnstagePaths(ctx context.Context, paths []string) error {
+	if !r.HeadExists(ctx) {
+		// Unborn branch: there is no HEAD to reset to.
+		return r.runPathList(ctx, paths, "rm", "--cached", "-r")
+	}
+	return r.runPathList(ctx, paths, "reset", "-q", "HEAD")
+}
+
+// runPathList runs a git command that takes its pathspecs from stdin, NUL
+// separated and literal.
+func (r *Runner) runPathList(ctx context.Context, paths []string, cmd ...string) error {
+	if len(paths) == 0 {
+		return errors.New("no paths")
+	}
+	var list bytes.Buffer
+	for _, path := range paths {
+		list.WriteString(path)
+		list.WriteByte(0)
+	}
+	args := append([]string{"--literal-pathspecs"}, cmd...)
+	args = append(args, "--pathspec-from-file=-", "--pathspec-file-nul")
+	_, err := r.RunInput(ctx, list.Bytes(), args...)
 	return err
 }
 
@@ -250,7 +288,7 @@ func (r *Runner) Discard(ctx context.Context, paths ...string) error {
 	if len(paths) == 0 {
 		return errors.New("no paths")
 	}
-	args := append([]string{"restore", "--worktree", "--"}, paths...)
+	args := append([]string{"--literal-pathspecs", "restore", "--worktree", "--"}, paths...)
 	_, err := r.Run(ctx, args...)
 	return err
 }

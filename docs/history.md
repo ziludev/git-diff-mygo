@@ -18,6 +18,17 @@ and **History**.
   one line of fixed columns, left to right: the author's avatar, the author,
   the relative commit time, the lane graph, the message and its ref chips on
   the right. 100 commits per page with a "Load older commits" button.
+- A filter field above the list narrows the commits by subject, author, short
+  hash or a ref name, case-insensitively. It filters the pages already loaded
+  and also applies to the next page; a refresh keeps it. With no match the
+  list says "No matching commits". Beside it, an author button opens a menu
+  of the authors in the loaded pages (by name, "All authors" first); picking
+  one keeps only that author's commits, on top of the text filter. The author
+  is matched by exact name, so two people sharing a name are one entry; the
+  choice is cleared when another repository opens, and an author whose
+  commits are all on pages not yet loaded appears once those load. Filtering hides rows only: a selected
+  commit that no longer matches keeps its details and diff in the right
+  panel, so the filter never blanks the right panel by itself.
 - Each row carries up to two branch/tag chips (tags in amber, branches muted)
   plus a `+N` count for the rest, so a tag or a side branch is visible without
   selecting the commit.
@@ -57,8 +68,11 @@ and **History**.
 - The body is read only when a commit is selected (`git show -s --format=%b`),
   so a page of 100 commits does not carry message bodies. A failed read only
   drops the body: the subject, the files and the diff still show.
-- The file list is capped at six rows and scrolls inside the cap, so a commit
-  with many files cannot push the diff off screen.
+- The details and their file list share the right panel with the diff through
+  a divider the user drags, or moves with ↑/↓ once it has the focus. It starts
+  at the details header plus about six file rows, so a commit with many files
+  cannot push the diff off screen; dragging up gives the diff the room, and
+  the file list scrolls inside whatever it has.
 - A file click is tied to the selected commit: selecting another commit drops
   the old file, its patch and any read still in flight (the per-projection
   epoch and the OID check do that).
@@ -93,6 +107,32 @@ Every row draws a colored lane column whose layout comes from `layoutGraph`
   The node is drawn over a halo in the row's own background color, so lanes
   crossing that row stop at the halo rather than touching the circle.
 
+### Commit actions
+
+Right-clicking a commit row opens a menu. It acts on the row clicked, whichever
+commit the right panel shows:
+
+- **Copy Hash** copies the full object id.
+- **Checkout Revision** detaches HEAD at the commit (`git checkout --detach`).
+- **New Branch from Here…** and **Tag Here…** ask for a name in a small
+  dialog (Enter confirms, Escape cancels, an empty name disables the button).
+  The branch is checked out; the tag is lightweight.
+- **Cherry-pick** applies the commit onto the current branch; **Revert** adds a
+  commit that undoes it. Both are omitted for merge commits (they need a
+  mainline choice the app cannot ask for yet).
+- **Reset Current Branch to Here** has Soft, Mixed and Hard. Only Hard asks
+  for confirmation, because it throws away uncommitted work; the others keep
+  the working tree and stay recoverable through the reflog.
+
+All of them run through the write slot, so they never overlap another write or
+a fetch/pull/push, and the menu items are disabled while one runs.
+
+Cherry-pick and revert can stop on a conflict, and the app has no conflict
+editor yet. Rather than leave the repository in a half-applied state, the app
+runs the matching `--abort` and says so; the working tree is as it was. A
+failure that is not a conflict (a dirty tree git refuses to overwrite) leaves
+nothing to abort and shows git's message.
+
 ## Data flow
 
 ```
@@ -115,6 +155,12 @@ separately, so switching tabs does not reload or lose a diff.
 | Labels | `git for-each-ref --format=%(objectname)%09%(refname)` |
 | Body | `git show -s --format=%b <oid>` |
 | Files | `git show --format= --name-status -z -M --first-parent <oid>` and `git show --format= --numstat -z -M --first-parent <oid>` |
+| Checkout revision | `git checkout --detach <oid>` |
+| New branch here | `git checkout -b <name> <oid>` |
+| Tag here | `git tag <name> <oid>` |
+| Cherry-pick | `git cherry-pick <oid>`; on a conflict `git cherry-pick --abort` |
+| Revert | `git revert --no-edit <oid>`; on a conflict `git revert --abort` |
+| Reset | `git reset --soft\|--mixed\|--hard <oid>` |
 | Patch | `git show --format= --no-color --no-ext-diff --no-textconv --no-show-signature --first-parent -M -U3 <oid> -- <path> [<origPath>]` |
 
 `-z` keeps paths byte-exact (no quoting, spaces and newlines are safe). The
@@ -141,11 +187,21 @@ record separator for the same reason.
 - **Slow repositories**: history is loaded lazily when the tab is first opened,
   never on the watcher's status refreshes; a stale response is dropped by a
   request counter.
+- **Revision argument**: the object id comes from the app's own log, and is
+  still checked to be hex before it reaches git, so it can never be read as an
+  option.
+- **Abort after a conflict**: detected through `CHERRY_PICK_HEAD` /
+  `REVERT_HEAD`. An empty cherry-pick (already applied) also stops with
+  `CHERRY_PICK_HEAD` set and is aborted the same way.
+- **Detached HEAD**: reset moves the detached HEAD; the menu says "Current
+  Branch" only because that is the usual case.
+- **After a reset or checkout**: the history reloads from the top; the right
+  panel keeps showing the chosen commit, which is still a valid object.
 - **Refresh**: a commit or a manual refresh reloads the first page, so a new
   commit appears at the top. Watcher events (`reason: "watch"`) do not touch
   the commit list: they fire for every edit and the list does not change.
 
 ## Not in this change
 
-A browsable project file tree, ref filtering (`--branches`, paths, authors),
-and checkout/cherry-pick/reset from a commit.
+A browsable project file tree, branch and path filtering, cherry-pick and
+revert of merge commits, multi-select, and a conflict editor.

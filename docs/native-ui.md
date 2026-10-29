@@ -47,11 +47,11 @@ internal/shell           UI state, async loaders, view functions,
 |---|---|
 | `App.tsx` toolbar + resizable split | `ui` shell view with a split |
 | `RepoPanel` Changes / History / Branches tabs | tab strip + per-tab list |
-| `ChangesPanel` sections, filter, hover actions | section headers + rows in a scroll column, filter field, always-visible row actions |
+| `ChangesPanel` sections, filter, hover actions | section headers + rows in a scroll column grouped by directory, untracked folded, filter field, always-visible row actions |
 | `CommitPanel` message + amend | text area, checkbox, buttons |
-| `HistoryPanel` + `CommitGraph` | virtualized list; lane graph drawn per row |
+| `HistoryPanel` + `CommitGraph` | virtualized list with a filter field; lane graph drawn per row |
 | `DiffPanel` + `@pierre/diffs` | virtualized patch lines, colored backgrounds, hunk headers |
-| `BranchPanel` | list + inline create field |
+| `BranchPanel` | Local/Remote tree grouped by `/`, inline create field, popover on the toolbar chip |
 | `ConfirmDialog` / toasts | native window dialog / notification bar |
 | `FilterInput` | plain text input with a placeholder (no leading icon) |
 
@@ -71,8 +71,9 @@ internal/shell           UI state, async loaders, view functions,
   (`▸ N unchanged lines`); expanding reads the new side of the diff lazily and
   shows it as context. Details and limits: `docs/diff.md`.
 - In the History tab the right panel holds, top to bottom, the selected
-  commit's details, its changed files (capped at six rows) and the diff of the
-  chosen file; the history list stays one row per commit.
+  commit's details, its changed files and the diff of the chosen file; the
+  details and files sit above the diff behind a divider the user drags. The
+  history list stays one row per commit.
 - Binary files and pure renames reuse the backend's `binary` flag and empty
   hunk list, and show a placeholder instead of an empty viewer.
 - Syntax highlighting, word-level highlighting and soft wrap are out of scope
@@ -87,7 +88,8 @@ internal/shell           UI state, async loaders, view functions,
    hunk actions, commit panel.
 3. **History** — commit page, lane graph, ref chips, the commit's details and
    file list in the right panel, per-file patch.
-4. **Branches** — list, checkout, create at HEAD, delete merged, filter.
+4. **Branches** — local and remote tree, checkout (including tracking checkout
+   of a remote branch), create at HEAD, delete merged, filter.
 5. **Remove the web frontend** — delete `src/`, `index.html`, `vite.config.ts`,
    `tsconfig.json`, `components.json`, the web dependencies and lockfile, and
    update README and docs. The app must still build a signed `.app` and `.dmg`.
@@ -100,13 +102,45 @@ Checked in the packaged app against a demo repository:
 
 - changes list selection and diff, file stage/unstage, commit via button and
   via Cmd+Enter inside the message field;
+- the changes tree: folders by path with their status letters and count,
+  folding and unfolding, the untracked section closed until its header is
+  clicked, and the more menu's "Group files by directory" switching to the
+  flat list;
+- folder rows: the hover Stage/Unstage button and the context menu stage or
+  unstage exactly the files listed under the folder in one git call (covered
+  against real repositories in `internal/shell`);
+- the commit menu in History (copy hash, checkout revision, new branch and tag
+  through the name dialog, cherry-pick, revert, soft/mixed/hard reset with the
+  hard confirmation), against real repositories;
+- the push dialog from the toolbar and from Commit and Push…: outgoing
+  commits, Publish for a branch without an upstream, "Nothing to push", all
+  against a real bare origin;
+- stash: the Stash dialog (optional message, untracked files on), the Stashes
+  tab with its files in the right panel, apply, pop and drop with the
+  confirmation, against real repositories;
+- keyboard: Up/Down through files, commits and stashes in the order drawn,
+  Space to stage and unstage, Cmd+F to the filter, and the keys staying out of
+  dialogs and the commit message (`docs/keyboard.md`);
+- the history filter by subject, author, hash and ref name, and its
+  "No matching commits" state;
+- the divider between the changes list and the commit box: dragging it
+  resizes both, the arrow keys move it once it has the focus, and the split
+  keeps 40 DIPs for each pane in a small window (a test drives the drag);
+- the divider between a selected commit's details and files and its diff: the
+  details start at the header plus six file rows, dragging up gives the diff
+  the room, and the file list scrolls inside what it has (a test drives the
+  drag);
 - Unified/Split diff layouts, Side by side/Stacked panes, and expanding a
   worktree gap (a commit gap is covered by `gitx` and row-builder tests);
 - history columns (avatar, author, time, lane graph, message, chips) checked
   in the packaged app; the commit's details, file list and diff in the right
   panel are covered by `internal/shell` tests;
-- branch list, checkout by row click, create from the inline field, delete
-  with the confirmation dialog;
+- branch list and popover trees, checkout by choosing a row and pressing Enter
+  or double-clicking (a list row owns its press, so a single click only
+  chooses), search filtering and Down/Enter in the popover, create from the
+  inline field, delete with the confirmation dialog;
+- remote branch checkout through the popover against a demo repository with
+  an `origin` (the local tracking branch is created);
 - Fetch/Pull/Push in the toolbar and the Git menu; Fetch was run against a real
   repository without an error toast, Pull and Push only in tests (running them
   against the open repository would move its branches);
@@ -114,7 +148,7 @@ Checked in the packaged app against a demo repository:
 - `bun run build` after `src/` was deleted: signed `.app` and `.dmg` still
   produced (the build no longer runs a frontend step).
 
-Keyboard: Cmd+1/2/3 switch Changes/History/Branches, Cmd+O opens the repository
+Keyboard: Cmd+1/2/3/4 switch Changes/History/Branches/Stashes, Cmd+O opens the repository
 picker, Cmd+Enter commits (including from the focused message field).
 
 ## Known gaps

@@ -14,9 +14,6 @@ import (
 const (
 	// commitFileRowHeight is one row of the commit's file list.
 	commitFileRowHeight float32 = 24
-	// commitFileListMaxHeight caps that list so the diff keeps room; further
-	// files scroll inside it.
-	commitFileListMaxHeight float32 = 6 * commitFileRowHeight
 	// maxCommitBodyLines caps the message body in the details header; a long
 	// message is cut rather than pushing the diff off screen.
 	maxCommitBodyLines = 4
@@ -24,7 +21,7 @@ const (
 
 func (a *App) diffView(c *ui.Context, p palette) {
 	t := c.Theme()
-	history := a.view == ViewHistory
+	history := a.showsCommitPanel()
 
 	var (
 		path        string
@@ -41,6 +38,9 @@ func (a *App) diffView(c *ui.Context, p palette) {
 	if history {
 		if a.selectedCommit == nil {
 			placeholder = "Select a commit to see its details."
+			if a.view == ViewStashes {
+				placeholder = "Select a stash to see its changes."
+			}
 		} else if a.loadingFiles {
 			placeholder = "Loading files…"
 		} else if a.commitFile == nil {
@@ -72,44 +72,53 @@ func (a *App) diffView(c *ui.Context, p palette) {
 	}
 
 	ui.Column(c).FillHeight().FillWidth().Background(t.Background).Children(func() {
-		// The commit's details and files sit above its diff, as in IDEA's log.
-		if history && a.selectedCommit != nil {
-			a.commitDetails(c, p)
-			a.commitFileList(c, p)
+		body := func() {
+			a.diffHeader(c, p, history, path, origPath, has, patch)
 			ui.Divider(c)
-		}
-		a.diffHeader(c, p, history, path, origPath, has, patch)
-		ui.Divider(c)
 
-		switch {
-		case errText != "":
-			emptyState(c, "Could not load the diff", errText, "Dismiss", func() {
-				if history {
-					a.commitErr = ""
-				} else {
-					a.errorText = ""
+			switch {
+			case errText != "":
+				emptyState(c, "Could not load the diff", errText, "Dismiss", func() {
+					if history {
+						a.commitErr = ""
+					} else {
+						a.errorText = ""
+					}
+				})
+			case placeholder != "":
+				emptyState(c, placeholder, "", "", nil)
+			case loading:
+				emptyState(c, "Loading…", "", "", nil)
+			case !has:
+				emptyState(c, "No diff to show", "Select the file again to retry.", "", nil)
+			case res.TooLarge:
+				emptyState(c, "File is too large to show",
+					"Open it in another tool, or stage it directly from the file list.", "", nil)
+			case res.Binary:
+				emptyState(c, "Binary file", "Binary changes are not rendered yet.", "", nil)
+			case len(patch.Hunks) == 0 || len(patch.Lines) == 0:
+				detail := "The file has no line changes."
+				if origPath != "" {
+					detail = "The file was renamed or moved without content changes."
 				}
-			})
-		case placeholder != "":
-			emptyState(c, placeholder, "", "", nil)
-		case loading:
-			emptyState(c, "Loading…", "", "", nil)
-		case !has:
-			emptyState(c, "No diff to show", "Select the file again to retry.", "", nil)
-		case res.TooLarge:
-			emptyState(c, "File is too large to show",
-				"Open it in another tool, or stage it directly from the file list.", "", nil)
-		case res.Binary:
-			emptyState(c, "Binary file", "Binary changes are not rendered yet.", "", nil)
-		case len(patch.Hunks) == 0 || len(patch.Lines) == 0:
-			detail := "The file has no line changes."
-			if origPath != "" {
-				detail = "The file was renamed or moved without content changes."
+				emptyState(c, "No textual changes", detail, "", nil)
+			default:
+				a.patchView(c, p, patch, editable)
 			}
-			emptyState(c, "No textual changes", detail, "", nil)
-		default:
-			a.patchView(c, p, patch, editable)
 		}
+		// The commit's details and files sit above its diff, as in IDEA's log,
+		// with a divider the user drags: a commit with many files takes the
+		// room, and the diff keeps the rest.
+		if history && a.selectedCommit != nil {
+			ui.SplitVertical(c, &a.commitPanelHeight, func() {
+				ui.Column(c).FillWidth().FillHeight().Background(t.Background).Children(func() {
+					a.commitDetails(c, p)
+					a.commitFileList(c, p)
+				})
+			}, body).Grow(1)
+			return
+		}
+		body()
 	})
 }
 
@@ -164,19 +173,16 @@ func commitMeta(commit *gitx.Commit) string {
 		time.Unix(commit.Time, 0).Format("2006-01-02 15:04"), commit.Short)
 }
 
-// commitFileList lists the selected commit's files above the diff. Clicking a
-// row shows that file's patch below; a long list scrolls inside the cap.
+// commitFileList lists the selected commit's files under its details.
+// Clicking a row shows that file's patch below; the list fills the room the
+// divider leaves it and scrolls beyond it.
 func (a *App) commitFileList(c *ui.Context, p palette) {
 	if len(a.commitFiles) == 0 {
 		return
 	}
-	height := float32(len(a.commitFiles)) * commitFileRowHeight
-	if height > commitFileListMaxHeight {
-		height = commitFileListMaxHeight
-	}
 	ui.List(c, &a.commitFilesList, len(a.commitFiles), func(i int) {
 		a.commitFileListRow(c, p, a.commitFiles[i])
-	}).Height(height)
+	}).Grow(1)
 }
 
 // commitFileListRow draws one file of the selected commit: status letter,
@@ -407,14 +413,14 @@ func (a *App) hunkRow(c *ui.Context, p palette, patch patchFile, index int, edit
 		ui.Spacer(c)
 		if editable {
 			if staged {
-				smallAction(c, "− Unstage hunk", func() {
+				smallAction(c, "Unstage hunk", func() {
 					a.applyHunk(gitx.ApplyUnstage, hunk.Index)
 				})
 			} else {
-				smallAction(c, "+ Stage hunk", func() {
+				smallAction(c, "Stage hunk", func() {
 					a.applyHunk(gitx.ApplyStage, hunk.Index)
 				})
-				smallAction(c, "↺ Discard hunk", func() {
+				smallAction(c, "Discard hunk", func() {
 					name := "this hunk"
 					if a.selection != nil {
 						name = a.selection.Path

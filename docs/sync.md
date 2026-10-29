@@ -1,6 +1,7 @@
 # Remote sync
 
-Status: implemented in M2 (2026-10-28).
+Status: implemented in M2 (2026-10-28); push preview, publishing a new branch
+and Commit and Push added 2026-10-29.
 
 ## Why
 
@@ -11,8 +12,9 @@ repository needs, so they sit on the toolbar next to Refresh.
 ## UX
 
 - The toolbar gets **Fetch**, **Pull** and **Push** buttons whenever a
-  repository is open. They are text buttons like Refresh, not icons: the app
-  has no icon set, and the words are unambiguous.
+  repository is open. They are icon buttons with tooltips
+  (`internal/shell/icons.go`); the toolbar's state text still names the
+  operation in flight, because an icon alone cannot.
 - Pull and Push need a checked-out branch with a commit. On a detached HEAD or
   an unborn branch they are disabled; Fetch stays enabled because it only
   updates remote-tracking refs.
@@ -20,12 +22,27 @@ repository needs, so they sit on the toolbar next to Refresh.
   are disabled, the toolbar shows "Fetching…", "Pulling…" or "Pushing…" next
   to the branch chip, and the commit button is disabled too: a commit racing a
   pull could capture a worktree that is halfway rewritten.
-- Push publishes the current branch to its upstream. There is no force push
-  and no refspec guessing: a branch without an upstream fails with git's own
-  message, which tells the user what to run. The command pins
-  `push.default=upstream` and `push.autoSetupRemote=false`, so a repository
-  configured for matching pushes cannot publish every same-named branch from
-  one click, and a missing upstream is never created silently.
+- Push (the toolbar button, the Git menu and Commit and Push…) opens a **Push
+  dialog** first: the commits that will leave the machine, newest first (the
+  hash and subject, capped at 50 with "and N more"), headed by
+  `branch → upstream`. The Push button runs the push; Cancel or Escape does
+  nothing. There is no force push. The command pins `push.default=upstream`
+  and `push.autoSetupRemote=false`, so a repository configured for matching
+  pushes cannot publish every same-named branch from one click.
+- **Publishing a new branch.** A branch without an upstream used to fail with
+  git's message. The dialog now lists the commits no remote has yet
+  (`HEAD --not --remotes`) and its button reads **Publish**: it pushes to the
+  only remote, or to `origin` when there are several, and sets the upstream
+  (`git push --set-upstream <remote> <branch>`). With several remotes and no
+  `origin`, or with none, the dialog says so and Publish is disabled: the app
+  does not guess.
+- The dialog warns when the upstream has commits the branch lacks (`↓N`): git
+  will refuse the push until the user pulls, and the warning says so before
+  the click. Nothing to push (no outgoing commits) disables the button.
+- **Commit and Push…** sits beside Commit. It commits, then opens the same
+  dialog, so the push is always previewed and one click away; it is disabled
+  while Amend is checked, because pushing an amended commit needs a force push
+  the app does not offer.
 - One operation is bounded to five minutes and is cancelled when another
   repository is opened. A credential helper that hangs, or a network that
   never answers, cannot leave the app with writes disabled forever.
@@ -53,6 +70,8 @@ repository needs, so they sit on the toolbar next to Refresh.
 RepoService.fetch() -> gitx.Fetch -> git fetch --prune
 RepoService.pull()  -> gitx.Pull  -> git pull --ff-only
 RepoService.push()  -> gitx.Push  -> git push
+RepoService.outgoing() -> gitx.Outgoing -> git log <range>, git rev-list --left-right --count
+RepoService.publish(remote, branch) -> gitx.PushBranch -> git push --set-upstream
 ```
 
 `internal/shell.App` keeps one sync slot (`syncing`, `syncOp`, `syncCancel`)
@@ -76,6 +95,9 @@ so the same commit still resolves after the refresh.
 | Fetch | `git fetch --prune` |
 | Pull | `git pull --ff-only` |
 | Push | `git -c push.default=upstream -c push.autoSetupRemote=false push` |
+| Outgoing (upstream) | `git log <upstream>..HEAD` and one `git rev-list --left-right --count HEAD...<upstream>` for both ahead and behind |
+| Outgoing (no upstream) | `git remote`, `git log HEAD --not --remotes` and `git rev-list --count HEAD --not --remotes` |
+| Publish | `git push --set-upstream <remote> refs/heads/<branch>:refs/heads/<branch>` |
 
 None of the three opens an editor, so none can hang on a terminal it does not
 have, and the context timeout bounds a hung credential helper.
@@ -104,4 +126,15 @@ have, and the context timeout bounds a hung credential helper.
   blocking the goroutine forever; `GIT_TERMINAL_PROMPT=0` is part of the
   runner's environment, and the timeout is the backstop for a helper that waits
   anyway.
+- **Dialog opened, then the repository changes**: the outgoing list is read
+  when the dialog opens and the answer is dropped if another repository was
+  opened meanwhile (an epoch, like the other loads); switching repository
+  closes the dialog.
+- **List read fails** (no commits, detached HEAD): the dialog shows git's
+  message and the push button stays disabled.
+- **Stale preview**: the list is a snapshot. A commit made while the dialog is
+  open is not in it, and git pushes whatever is on the branch when the button
+  is pressed; the dialog is modal, so nothing in the window can change it.
+- **Remote name**: the remote chosen for Publish comes from `git remote`; a
+  name starting with `-` is refused before git sees it.
 - **Unborn branch / detached HEAD**: pull and push are disabled, fetch is not.

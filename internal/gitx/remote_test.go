@@ -168,3 +168,127 @@ func TestPushWithoutUpstreamFails(t *testing.T) {
 		t.Fatalf("push error = %v, want git's upstream message", err)
 	}
 }
+
+// TestOutgoingWithUpstream lists exactly the commits the upstream lacks, and
+// counts the ones it has that the branch does not.
+func TestOutgoingWithUpstream(t *testing.T) {
+	ctx := context.Background()
+	a, b := newRemotePair(t)
+
+	plan, err := a.Outgoing(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Upstream == "" || plan.Total != 0 || len(plan.Commits) != 0 || plan.Behind != 0 {
+		t.Fatalf("clean plan = %+v", plan)
+	}
+
+	writeFile(t, a, "a.txt", "1\n")
+	commitAll(t, a, "second")
+	writeFile(t, a, "a.txt", "2\n")
+	commitAll(t, a, "third")
+	// b pushes first, so a is both ahead and behind.
+	writeFile(t, b, "b.txt", "b\n")
+	commitAll(t, b, "from b")
+	if err := b.Push(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Run(ctx, "fetch", "-q"); err != nil {
+		t.Fatal(err)
+	}
+	plan, err = a.Outgoing(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Total != 2 || len(plan.Commits) != 2 || plan.Behind != 1 {
+		t.Fatalf("plan = %+v", plan)
+	}
+	if plan.Commits[0].Subject != "third" || plan.Commits[1].Subject != "second" {
+		t.Fatalf("commits = %+v, want newest first", plan.Commits)
+	}
+	if plan.Branch != "main" || plan.Upstream != "origin/main" {
+		t.Fatalf("branch/upstream = %q/%q", plan.Branch, plan.Upstream)
+	}
+}
+
+// TestOutgoingWithoutUpstream lists what no remote has, picks the lone remote,
+// and PushBranch then publishes the branch with its upstream set.
+func TestOutgoingWithoutUpstream(t *testing.T) {
+	ctx := context.Background()
+	a, _ := newRemotePair(t)
+	if _, err := a.Run(ctx, "checkout", "-q", "-b", "topic"); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, a, "t.txt", "t\n")
+	commitAll(t, a, "topic work")
+
+	plan, err := a.Outgoing(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Upstream != "" || plan.Remote != "origin" || plan.Total != 1 ||
+		plan.Commits[0].Subject != "topic work" {
+		t.Fatalf("plan = %+v", plan)
+	}
+	if err := a.PushBranch(ctx, plan.Remote, plan.Branch); err != nil {
+		t.Fatal(err)
+	}
+	plan, err = a.Outgoing(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Upstream != "origin/topic" || plan.Total != 0 {
+		t.Fatalf("after publish: %+v", plan)
+	}
+}
+
+func TestOutgoingCapAndRefusals(t *testing.T) {
+	ctx := context.Background()
+	a, _ := newRemotePair(t)
+	for i := 0; i < maxOutgoing+3; i++ {
+		writeFile(t, a, "n.txt", strings.Repeat("x", i+1))
+		commitAll(t, a, "c")
+	}
+	plan, err := a.Outgoing(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Total != maxOutgoing+3 || len(plan.Commits) != maxOutgoing {
+		t.Fatalf("total=%d listed=%d", plan.Total, len(plan.Commits))
+	}
+
+	// Unknown remote and option-looking names never reach git.
+	if err := a.PushBranch(ctx, "nowhere", "main"); err == nil || !strings.Contains(err.Error(), "unknown remote") {
+		t.Fatalf("unknown remote err = %v", err)
+	}
+	if err := a.PushBranch(ctx, "--force", "main"); err == nil {
+		t.Fatal("an option-looking remote was accepted")
+	}
+	if err := a.PushBranch(ctx, "origin", "-x"); err == nil {
+		t.Fatal("an option-looking branch was accepted")
+	}
+
+	// Detached HEAD has no branch to push.
+	if _, err := a.Run(ctx, "checkout", "-q", "--detach"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Outgoing(ctx); err == nil {
+		t.Fatal("a detached HEAD produced a plan")
+	}
+}
+
+func TestPublishRemoteChoice(t *testing.T) {
+	for _, tc := range []struct {
+		remotes []string
+		want    string
+	}{
+		{nil, ""},
+		{[]string{"upstream"}, "upstream"},
+		{[]string{"fork", "origin"}, "origin"},
+		{[]string{"fork", "upstream"}, ""},
+	} {
+		if got := publishRemote(tc.remotes); got != tc.want {
+			t.Fatalf("publishRemote(%v) = %q, want %q", tc.remotes, got, tc.want)
+		}
+	}
+}

@@ -34,6 +34,7 @@ const (
 	ViewChanges View = iota
 	ViewHistory
 	ViewBranches
+	ViewStashes
 )
 
 // App holds the window state. Every field is read and written on the main
@@ -49,6 +50,14 @@ type App struct {
 	sidebarHeight float32
 	panes         paneLayout
 
+	// changesPercent is the changes list's share of the sidebar above the
+	// commit box, 0 to 100; dragging their divider sets it.
+	changesPercent float32
+
+	// commitPanelHeight is the height of the history panel's commit details
+	// and file list above the diff; the divider sets it.
+	commitPanelHeight float32
+
 	status        gitx.Status
 	loadingStatus bool
 	selection     *gitx.Change
@@ -58,6 +67,9 @@ type App struct {
 	loadingDiff   bool
 	writing       bool
 	errorText     string
+	// statusVersion changes whenever a new status is adopted, so the derived
+	// lists (the changes tree) know when to rebuild.
+	statusVersion uint64
 
 	// syncing is the remote operation in flight ("fetch", "pull" or "push"),
 	// "" when none. One at a time: they touch the same refs, and pull and push
@@ -77,6 +89,9 @@ type App struct {
 	hasMoreCommits bool
 	loadingCommits bool
 	historyErr     string
+	// commitsVersion changes whenever the commit page is replaced, so the
+	// filtered history rows are rebuilt only then, or when the filter changes.
+	commitsVersion uint64
 
 	// selectedCommit is the commit the right panel shows: its details, its
 	// files and the diff of the file picked among them.
@@ -92,21 +107,75 @@ type App struct {
 	loadingCommitDiff bool
 	commitErr         string
 
+	// stashes is the stash list; it is read on every refresh.
+	stashes        []gitx.StashEntry
+	stashesLoaded  bool
+	loadingStashes bool
+	stashErr       string
+
 	branches        []gitx.BranchEntry
 	branchesLoaded  bool
 	loadingBranches bool
 	branchErr       string
+	// branchesVersion changes whenever a branch list is adopted, so both trees
+	// rebuild only then, or when their filter changes.
+	branchesVersion uint64
+
+	// The branch popover is the quick switcher on the toolbar chip; the
+	// Branches tab draws the same tree from its own state, so each keeps its
+	// filter, open folders and chosen row.
+	branchPopupOpen   bool
+	focusBranchFilter bool
+	branchPopupTree   branchTreeState
+	branchTab         branchTreeState
+	// revealedBranch is the checked-out branch whose folders the trees last
+	// opened; a change reveals the new branch's path without reopening folders
+	// the user closed.
+	revealedBranch string
 
 	message      string
 	amend        bool
 	changeFilter string
-	branchFilter string
-	creating     bool
+	// changesTree groups the changes rows under their directories; the more
+	// menu switches to the flat list. closedDirs holds the folders and the
+	// untracked section the user closed, by key; the untracked section starts
+	// closed in a new app.
+	changesTree bool
+	closedDirs  map[string]bool
+	// changeFilterSeen is the filter the folders were last opened for: a new
+	// filter opens every folder once, so a match is never hidden.
+	changeFilterSeen string
+	// changeCache holds the sections and directory trees the Changes tab draws.
+	// They are rebuilt only when the status, the filter or the layout changes,
+	// so drawing a frame walks them instead of rebuilding them.
+	changeCache changeCache
+	// commitFilter narrows the loaded history page by message, author, hash
+	// or ref name.
+	commitFilter string
+	// commitAuthor keeps one author's commits; empty means everyone.
+	commitAuthor string
+	// historyCache is the filtered history rows, rebuilt only when the commit
+	// page, the author or the needle changes; Up and Down reuse it.
+	historyCache historyRowsCache
+	creating     branchCreateArea
 	newName      string
 	focusNew     bool
 
-	confirm      *confirmation
-	confirmOpen  bool
+	// changeOrder is the file rows the Changes tab drew, top to bottom; Up and
+	// Down walk it. revealRow asks the chosen row to scroll into view when it
+	// is next drawn; focusFilter asks for the filter field of focusFilterOf.
+	changeOrder   []gitx.Change
+	revealRow     bool
+	focusFilter   bool
+	focusFilterOf View
+	confirm       *confirmation
+	promptValue   string
+	promptOption  bool
+	focusPrompt   bool
+	confirmOpen   bool
+	// push is the push dialog; nil while closed.
+	push         *pushDialog
+	pushOpen     bool
 	toast        string
 	toastIsError bool
 	toastDur     time.Duration
@@ -141,6 +210,8 @@ type epochs struct {
 	commitDiff atomic.Uint64
 	branches   atomic.Uint64
 	sync       atomic.Uint64
+	push       atomic.Uint64
+	stashes    atomic.Uint64
 }
 
 type confirmation struct {
@@ -148,16 +219,39 @@ type confirmation struct {
 	detail string
 	label  string
 	run    func()
+	// input is the placeholder of a text field; set, the dialog is a prompt
+	// and runInput gets the trimmed text (and the checkbox) instead of run
+	// being called. option labels an optional checkbox, and optional lets the
+	// text stay empty.
+	input    string
+	option   string
+	optional bool
+	runInput func(text string, option bool)
+}
+
+// promptSpec describes a prompt dialog.
+type promptSpec struct {
+	title, detail, label, placeholder string
+	// option is the label of a checkbox, on by default; "" for none.
+	option string
+	// optional lets the text stay empty.
+	optional bool
 }
 
 // New returns the shell for one window.
 func New(svc *service.RepoService, actions *service.MenuActions) *App {
 	a := &App{
-		svc:           svc,
-		actions:       actions,
-		sidebar:       380,
-		sidebarHeight: 380,
-		toastDur:      4 * time.Second,
+		svc:               svc,
+		actions:           actions,
+		sidebar:           380,
+		sidebarHeight:     380,
+		changesPercent:    78,
+		commitPanelHeight: 200,
+		changesTree:       true,
+		closedDirs:        map[string]bool{"s:untracked": true},
+		toastDur:          4 * time.Second,
+		branchTab:         newBranchTreeState(),
+		branchPopupTree:   newBranchTreeState(),
 	}
 	// The watcher and menu actions run outside the view; marshal their
 	// notifications back to the main thread before touching state.
@@ -200,6 +294,7 @@ func (a *App) refresh(reason string) {
 	if a.branchesLoaded {
 		a.loadBranches()
 	}
+	a.loadStashes()
 }
 
 // reloadStatus reads the working tree and adopts it.
@@ -231,6 +326,10 @@ func (a *App) reloadStatus() {
 // exists, following the same path into its new bucket.
 func (a *App) adoptStatus(st gitx.Status) {
 	a.status = st
+	a.statusVersion++
+	// A checkout or a branch created outside Twill moves HEAD; the trees may
+	// otherwise keep the new branch closed in a folder.
+	a.revealCurrentBranch()
 	if st.Root == "" {
 		a.resetDiff()
 		return
@@ -310,16 +409,42 @@ func (a *App) resetRepoState(root string) {
 	a.syncing = false
 	a.syncOp = ""
 	a.status = gitx.NewStatus(root)
+	// A new repository invalidates everything derived from the old status.
+	a.statusVersion++
+	a.changeCache = changeCache{}
 	a.resetDiff()
 	a.resetCommitSelection()
 	a.commits = nil
+	a.commitsVersion++
+	a.historyCache = historyRowsCache{}
+	// Authors belong to the repository that is leaving.
+	a.commitAuthor = ""
 	a.graph = nil
 	a.commitsLoaded = false
 	a.hasMoreCommits = false
 	a.historyErr = ""
+	a.epochs.stashes.Add(1)
+	a.loadingStashes = false
+	a.stashes = nil
+	a.stashesLoaded = false
+	a.stashErr = ""
 	a.branches = nil
+	a.branchesVersion++
 	a.branchesLoaded = false
 	a.branchErr = ""
+	// The keyboard's place in the old list, a pending focus request and a row
+	// waiting to be revealed all describe rows that no longer exist.
+	a.changeOrder = a.changeOrder[:0]
+	a.revealRow = false
+	a.focusFilter = false
+	a.focusFilterOf = ViewChanges
+	a.branchPopupOpen = false
+	a.branchPopupTree.filter = ""
+	a.branchPopupTree.reset()
+	a.branchTab.reset()
+	a.revealedBranch = ""
+	a.cancelNewBranch()
+	a.closePush()
 }
 
 func (a *App) resetDiff() {
@@ -367,6 +492,30 @@ func (a *App) unstage(ch gitx.Change) {
 	})
 }
 
+// stageFolder and unstageFolder act on exactly the files a folder row lists,
+// in one git call, so a folder of new files is staged without also staging
+// files the section does not show.
+func (a *App) stageFolder(files []gitx.Change) {
+	a.write(func() error {
+		return a.svc.StagePaths(context.Background(), changePaths(files))
+	})
+}
+
+func (a *App) unstageFolder(files []gitx.Change) {
+	a.write(func() error {
+		return a.svc.UnstagePaths(context.Background(), changePaths(files))
+	})
+}
+
+// changePaths lists the paths git needs for rows, both sides of a rename.
+func changePaths(files []gitx.Change) []string {
+	out := make([]string, 0, len(files))
+	for _, ch := range files {
+		out = append(out, gitx.Paths(ch.Path, ch.OrigPath)...)
+	}
+	return out
+}
+
 func (a *App) discard(ch gitx.Change) {
 	a.confirmAction("Discard changes to "+ch.Path+"?",
 		"This cannot be undone. The file returns to the index version.",
@@ -397,8 +546,12 @@ func (a *App) applyHunk(op gitx.ApplyOp, hunk int) {
 	})
 }
 
-func (a *App) commit() {
-	if !a.canCommit() {
+func (a *App) commit() { a.commitThen(false) }
+
+// commitThen commits, and with push opens the push dialog once the commit
+// exists, so the push is previewed rather than fired blindly.
+func (a *App) commitThen(push bool) {
+	if !a.canCommit() || (push && a.amend) {
 		return
 	}
 	msg, amend := a.message, a.amend
@@ -417,6 +570,9 @@ func (a *App) commit() {
 			a.message = ""
 			a.amend = false
 			a.refresh("")
+			if push {
+				a.openPush()
+			}
 		})
 	}()
 }
@@ -486,7 +642,13 @@ func (a *App) hasSyncBranch() bool {
 // where the sync slot lives.
 func (a *App) FetchFromMenu() { a.apply(a.fetchRemote) }
 func (a *App) PullFromMenu()  { a.apply(a.pullRemote) }
-func (a *App) PushFromMenu()  { a.apply(a.pushRemote) }
+func (a *App) PushFromMenu() {
+	a.apply(func() {
+		if a.hasSyncBranch() {
+			a.openPush()
+		}
+	})
+}
 
 // loadCommits reads one page; more appends the next page. A page always
 // replaces the list from the top so a newer commit cannot shift an older
@@ -533,6 +695,7 @@ func (a *App) loadCommits(more bool) {
 			}
 			a.commitsLoaded = true
 			a.hasMoreCommits = len(page) == historyPage
+			a.commitsVersion++
 			a.graph, a.graphLanes = layoutGraph(a.commits)
 		})
 	}()
@@ -686,6 +849,7 @@ func (a *App) loadBranches() {
 			}
 			a.branches = list
 			a.branchesLoaded = true
+			a.branchesVersion++
 		})
 	}()
 }
@@ -696,15 +860,53 @@ func (a *App) ensureBranches() {
 	}
 }
 
+// refreshBranches reloads a list that is already loaded, so a fetch or branch
+// change made outside Twill shows up when a branch view opens: the file
+// watcher ignores .git and would otherwise never report it.
+func (a *App) refreshBranches() {
+	if a.branchesLoaded && !a.loadingBranches {
+		a.loadBranches()
+		return
+	}
+	a.ensureBranches()
+}
+
+// checkoutBranch switches to a local branch.
 func (a *App) checkoutBranch(name string) {
+	a.checkout(func() error { return a.svc.CheckoutBranch(context.Background(), name) })
+}
+
+// checkoutRemoteBranch creates and switches to the local counterpart of a
+// remote-tracking branch.
+func (a *App) checkoutRemoteBranch(name string) {
+	a.checkout(func() error { return a.svc.CheckoutRemoteBranch(context.Background(), name) })
+}
+
+// checkout runs one branch switch and, on success, drops the state that
+// belonged to the branch the user left and closes the branch popover: the tree
+// it shows is about to be reloaded for the new branch.
+//
+// A failure reloads the branch list: the row came from a list that may predate
+// a branch created in a terminal, and the next attempt should see it.
+func (a *App) checkout(run func() error) {
+	root := a.status.Root
 	a.write(func() error {
-		if err := a.svc.CheckoutBranch(context.Background(), name); err != nil {
+		if err := run(); err != nil {
+			a.apply(func() {
+				if a.status.Root == root {
+					a.loadBranches()
+				}
+			})
 			return err
 		}
-		// The selected diff and commit belong to the branch we left.
 		a.apply(func() {
+			if a.status.Root != root {
+				return
+			}
 			a.resetDiff()
 			a.resetCommitSelection()
+			a.branchPopupOpen = false
+			a.cancelNewBranch()
 		})
 		return nil
 	})
@@ -771,6 +973,18 @@ func (a *App) showError(err error) {
 
 func (a *App) confirmAction(title, detail, label string, run func()) {
 	a.confirm = &confirmation{title: title, detail: detail, label: label, run: run}
+	a.confirmOpen = true
+}
+
+// promptAction asks for one line of text and, optionally, one checkbox. Enter
+// or the button runs it with the trimmed text; an empty field disables both
+// unless the text is optional.
+func (a *App) promptAction(spec promptSpec, run func(text string, option bool)) {
+	a.confirm = &confirmation{title: spec.title, detail: spec.detail, label: spec.label,
+		input: spec.placeholder, option: spec.option, optional: spec.optional, runInput: run}
+	a.promptValue = ""
+	a.promptOption = spec.option != ""
+	a.focusPrompt = true
 	a.confirmOpen = true
 }
 

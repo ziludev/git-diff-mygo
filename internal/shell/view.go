@@ -106,6 +106,9 @@ func (a *App) View(c *ui.Context) {
 	if a.confirmOpen {
 		a.modal(c, p)
 	}
+	if a.pushOpen {
+		a.pushModal(c)
+	}
 	a.shortcuts(c)
 }
 
@@ -116,40 +119,48 @@ func (a *App) shortcuts(c *ui.Context) {
 	c.OnShortcut(ui.Cmd, ui.Key1, func() { a.show(ViewChanges) })
 	c.OnShortcut(ui.Cmd, ui.Key2, func() { a.show(ViewHistory) })
 	c.OnShortcut(ui.Cmd, ui.Key3, func() { a.show(ViewBranches) })
+	c.OnShortcut(ui.Cmd, ui.Key4, func() { a.show(ViewStashes) })
+	a.navShortcuts(c)
 }
 
 func (a *App) toolbar(c *ui.Context, p palette) {
 	t := c.Theme()
 	hasRepo := a.status.Root != ""
-	ui.Row(c).FillWidth().Shrink(0).Height(40).PaddingX(10).Gap(8).
+	ui.Row(c).FillWidth().Shrink(0).Height(42).PaddingX(10).Gap(8).
 		Background(t.Surface).Children(func() {
 		ui.Text(c, "Twill").Bold().FontSize(13)
 		if hasRepo {
 			ui.Text(c, repoName(a.status.Root)).FontSize(12).TextColor(t.TextMuted)
 			ui.Spacer(c)
-			switch {
-			case a.syncing:
-				ui.Text(c, syncText(a.syncOp)).FontSize(11).TextColor(t.TextMuted)
-			case a.loadingStatus:
-				ui.Text(c, "Refreshing…").FontSize(11).TextColor(t.TextMuted)
-			}
+			a.syncState(c)
 			a.branchChip(c, p)
 			a.syncButtons(c)
+			ui.Divider(c)
+			iconButton(c, iconRefresh, "Refresh", "Refresh the status and history", a.actions == nil, func() {
+				if a.actions != nil {
+					a.actions.RefreshFromMenu()
+				}
+			})
+			a.moreMenu(c)
 		} else {
 			ui.Spacer(c)
 		}
-		// The arrangement changes no derived data: the next frame draws it.
-		segmentedEnum(c, &a.panes, "Side by side", "Stacked")
-		refresh := ui.Button(c, "Refresh").Height(26).FontSize(11).
-			Disabled(a.actions == nil)
-		refresh.OnClick(func() {
-			if a.actions != nil {
-				a.actions.RefreshFromMenu()
-			}
-		})
 		open := ui.PrimaryButton(c, "Open Repository")
 		open.Height(26).FontSize(12).OnClick(a.openPicker)
 	})
+}
+
+// syncState names the operation in flight, which an icon alone cannot say. A
+// network operation wins over a status reload: it is the one the user just
+// started, and a pull reloads the status anyway.
+func (a *App) syncState(c *ui.Context) {
+	t := c.Theme()
+	switch {
+	case a.syncing:
+		ui.Text(c, syncText(a.syncOp)).FontSize(11).TextColor(t.TextMuted)
+	case a.loadingStatus:
+		ui.Text(c, "Refreshing…").FontSize(11).TextColor(t.TextMuted)
+	}
 }
 
 // syncText is the toolbar's label while a network operation runs.
@@ -165,33 +176,55 @@ func syncText(op string) string {
 	return "Syncing…"
 }
 
-// syncButtons draws Fetch, Pull and Push. They share one slot, so all three
-// are disabled while any of them runs or a worktree write is in flight; pull
-// and push also need a checked-out branch with a commit, which a detached HEAD
-// and an unborn branch do not have.
+// syncButtons draws Fetch, Pull and Push as icons. They share one slot, so all
+// three are disabled while any of them runs or a worktree write is in flight;
+// pull and push also need a checked-out branch with a commit, which a detached
+// HEAD and an unborn branch do not have.
 func (a *App) syncButtons(c *ui.Context) {
 	branch := a.hasSyncBranch()
 	busy := a.busy()
-	ui.Row(c).Shrink(0).Gap(4).Children(func() {
+	ui.Row(c).Shrink(0).Gap(2).Children(func() {
 		for _, op := range []struct {
+			icon    iconName
 			label   string
 			tooltip string
 			enabled bool
 			run     func()
 		}{
-			{"Fetch", "Fetch from the remote and prune deleted refs", true, a.fetchRemote},
-			{"Pull", "Fast-forward the current branch from its upstream", branch, a.pullRemote},
-			{"Push", "Push the current branch to its upstream", branch, a.pushRemote},
+			{iconFetch, "Fetch", "Fetch from the remote and prune deleted refs", true, a.fetchRemote},
+			{iconPull, "Pull", "Pull: fast-forward the current branch from its upstream", branch, a.pullRemote},
+			{iconPush, "Push", "Review the commits to push, then push the current branch", branch, a.openPush},
 		} {
-			btn := ui.Button(c, op.label).Height(26).FontSize(11).
-				Disabled(busy || !op.enabled).Tooltip(op.tooltip)
-			btn.OnClick(op.run)
+			iconButton(c, op.icon, op.label, op.tooltip, busy || !op.enabled, op.run)
 		}
 	})
 }
 
-// branchChip shows the checked-out branch and its upstream counts; clicking
-// it opens the Branches tab.
+// moreMenu holds the actions that do not deserve toolbar width. The pane
+// arrangement is a checked pair so the current one is visible.
+func (a *App) moreMenu(c *ui.Context) {
+	btn := iconButton(c, iconMore, "More actions", "Pane layout and other actions", false, nil)
+	btn.Menu(func(m *ui.Menu) {
+		if m.Item("Side by side panes").Checked(a.panes == panesSideBySide).Chosen() {
+			a.panes = panesSideBySide
+		}
+		if m.Item("Stacked panes").Checked(a.panes == panesStacked).Chosen() {
+			a.panes = panesStacked
+		}
+		m.Separator()
+		if m.Item("Group files by directory").Checked(a.changesTree).Chosen() {
+			a.changesTree = !a.changesTree
+		}
+	})
+}
+
+// branchPopupTreeHeight caps the popover's tree; more branches scroll inside it
+// instead of growing past the window.
+const branchPopupTreeHeight float32 = 320
+
+// branchChip shows the checked-out branch and its upstream counts; clicking it
+// opens the branch popover for a quick switch. The Branches tab stays the
+// full management view.
 func (a *App) branchChip(c *ui.Context, p palette) {
 	t := c.Theme()
 	b := a.status.Branch
@@ -203,15 +236,94 @@ func (a *App) branchChip(c *ui.Context, p palette) {
 			name = "no branch"
 		}
 	}
-	chip := ui.ButtonBase(c).Height(24).PaddingX(8).Radius(6).
-		Background(t.Background).Border(1, t.Border).Gap(4).Cursor(ui.CursorPointer)
+	chip := ui.ButtonBase(c).Height(26).PaddingX(8).Radius(6).
+		Background(t.Background).Border(1, t.Border).Gap(5).Cursor(ui.CursorPointer)
 	chip.Children(func() {
-		ui.Text(c, "⎇ "+name).FontSize(11)
-		if b.Ahead > 0 || b.Behind > 0 {
-			ui.Text(c, syncLabel(b)).FontSize(10).TextColor(t.TextMuted)
+		icon(c, iconBranch).FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, name).FontSize(11)
+		if s := syncLabel(b); s != "" {
+			ui.Text(c, s).FontSize(10).TextColor(t.TextMuted)
 		}
+		icon(c, iconChevronDown).FontSize(10).TextColor(t.TextMuted)
 	})
-	chip.OnClick(func() { a.show(ViewBranches) })
+	chip.Tooltip("Switch, create or delete a branch")
+	chip.Label("Current branch: " + name)
+	chip.OnClick(func() {
+		a.branchPopupOpen = !a.branchPopupOpen
+		if !a.branchPopupOpen {
+			a.cancelNewBranch()
+			return
+		}
+		// The search, the choice and a draft start fresh; the folders stay
+		// where the user left them. The watcher ignores .git, so an external
+		// fetch or branch change is only visible after a reload.
+		a.branchPopupTree.filter = ""
+		a.branchPopupTree.row = -1
+		a.focusBranchFilter = true
+		a.cancelNewBranch()
+		a.refreshBranches()
+	})
+	wasOpen := a.branchPopupOpen
+	ui.Popover(c, chip, &a.branchPopupOpen, func() {
+		a.branchPopupPanel(c, p)
+	})
+	if wasOpen && !a.branchPopupOpen {
+		// Escape or a press outside closed it; a half-typed branch name does
+		// not belong to the next place the user goes.
+		a.cancelNewBranch()
+	}
+}
+
+// branchPopupPanel is the quick switcher: search, the same tree as the tab,
+// and the two ways out of a switch (create a branch, or manage branches).
+func (a *App) branchPopupPanel(c *ui.Context, p palette) {
+	t := c.Theme()
+	unborn := a.branchUnborn()
+	ui.Column(c).Width(340).Gap(6).Children(func() {
+		input := a.filterInput(c, &a.branchPopupTree.filter, "Search branches")
+		if a.focusBranchFilter {
+			input.Focus()
+			a.focusBranchFilter = false
+		}
+		// The field keeps the focus while the arrows choose a branch, so
+		// typing and choosing never fight; Enter switches to the choice.
+		input.OnShortcut(0, ui.KeyDown, func() { a.moveBranchPopupRow(1) })
+		input.OnShortcut(0, ui.KeyUp, func() { a.moveBranchPopupRow(-1) })
+		input.OnSubmit(a.activateBranchPopupRow)
+		if a.creating == branchCreatePopup {
+			a.newBranchRow(c)
+		}
+		needle := filterNeedle(a.branchPopupTree.filter)
+		if !a.branchTreeView(c, &a.branchPopupTree, branchPopupTreeHeight) {
+			switch {
+			case a.branchErr != "" && len(a.branches) == 0:
+				ui.Row(c).FillWidth().Padding(8).Gap(6).Children(func() {
+					ui.Text(c, "Could not load branches").FontSize(11).Grow(1).
+						TextColor(p.warnText).SingleLine()
+					retry := ui.Button(c, "Retry").Height(20).FontSize(10)
+					retry.OnClick(a.loadBranches)
+				})
+			case !a.branchesLoaded || (a.loadingBranches && len(a.branches) == 0):
+				ui.Text(c, "Loading…").FontSize(11).TextColor(t.TextMuted).Padding(8)
+			default:
+				title, _ := branchEmpty(needle, unborn)
+				ui.Text(c, title).FontSize(11).TextColor(t.TextMuted).Padding(8)
+			}
+		}
+		ui.Divider(c)
+		ui.Row(c).FillWidth().Gap(6).Children(func() {
+			create := ui.Button(c, "New Branch").Height(24).FontSize(10).
+				Disabled(!a.canCreateBranch())
+			create.OnClick(func() { a.startNewBranch(branchCreatePopup) })
+			ui.Spacer(c)
+			manage := ui.Button(c, "Manage Branches").Height(24).FontSize(10)
+			manage.OnClick(func() {
+				a.cancelNewBranch()
+				a.branchPopupOpen = false
+				a.show(ViewBranches)
+			})
+		})
+	})
 }
 
 func syncLabel(b gitx.Branch) string {
@@ -254,16 +366,46 @@ func (a *App) modal(c *ui.Context, p palette) {
 			Radius(t.Radius+2).Border(1, t.Border).Children(func() {
 			ui.Text(c, conf.title).Bold().FontSize(13)
 			ui.Text(c, conf.detail).FontSize(11).TextColor(t.TextMuted).Wrap()
+			// submit closes the dialog and runs what it asked for. A prompt
+			// with an empty field does nothing; a busy app does nothing either,
+			// as the write it would start is refused anyway.
+			submit := func() {
+				if conf.runInput == nil {
+					a.confirmOpen = false
+					a.confirm = nil
+					conf.run()
+					return
+				}
+				name := strings.TrimSpace(a.promptValue)
+				if (name == "" && !conf.optional) || a.busy() {
+					return
+				}
+				a.confirmOpen = false
+				a.confirm = nil
+				conf.runInput(name, a.promptOption)
+			}
+			if conf.runInput != nil {
+				input := ui.TextInput(c, &a.promptValue).FillWidth().Height(28).FontSize(12).
+					PaddingX(6).Font(mono()).Placeholder(conf.input)
+				if a.focusPrompt {
+					input.Focus()
+					a.focusPrompt = false
+				}
+				input.OnSubmit(submit)
+				if conf.option != "" {
+					ui.Checkbox(c, &a.promptOption, conf.option).FontSize(11)
+				}
+			}
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
 				cancel := ui.Button(c, "Cancel")
 				cancel.OnClick(func() { a.confirmOpen = false; a.confirm = nil })
 				run := ui.PrimaryButton(c, conf.label)
-				run.Background(t.Danger)
-				run.OnClick(func() {
-					a.confirmOpen = false
-					a.confirm = nil
-					conf.run()
-				})
+				if conf.runInput == nil {
+					run.Background(t.Danger)
+				} else {
+					run.Disabled((strings.TrimSpace(a.promptValue) == "" && !conf.optional) || a.busy())
+				}
+				run.OnClick(submit)
 			})
 		})
 	})
@@ -284,6 +426,8 @@ func (a *App) sidebarView(c *ui.Context, p palette) {
 			a.historyView(c, p)
 		case ViewBranches:
 			a.branchView(c, p)
+		case ViewStashes:
+			a.stashView(c, p)
 		default:
 			a.changesView(c, p)
 		}
@@ -292,12 +436,22 @@ func (a *App) sidebarView(c *ui.Context, p palette) {
 
 // show switches the sidebar and loads that view's data on first use.
 func (a *App) show(v View) {
+	// A stash and a commit share the right panel; one must not be shown as
+	// the other when the tab changes.
+	if (v == ViewStashes) != (a.view == ViewStashes) {
+		a.resetCommitSelection()
+	}
+	// A focus request belongs to the tab that made it; leaving that tab drops
+	// it instead of surprising the user when they come back.
+	if a.view != v {
+		a.focusFilter = false
+	}
 	a.view = v
 	switch v {
 	case ViewHistory:
 		a.ensureCommits()
 	case ViewBranches:
-		a.ensureBranches()
+		a.refreshBranches()
 	}
 }
 
@@ -313,6 +467,13 @@ func (a *App) tabs(c *ui.Context, p palette) {
 		})
 		a.tab(c, "Branches", "", a.view == ViewBranches, func() {
 			a.show(ViewBranches)
+		})
+		stashCount := ""
+		if n := len(a.stashes); n > 0 {
+			stashCount = strconv.Itoa(n)
+		}
+		a.tab(c, "Stashes", stashCount, a.view == ViewStashes, func() {
+			a.show(ViewStashes)
 		})
 	})
 }
@@ -331,6 +492,20 @@ func (a *App) tab(c *ui.Context, label, badge string, active bool, onClick func(
 	})
 	btn.Label(label)
 	btn.OnClick(onClick)
+}
+
+// rowTint gives a selectable row its selection or hover color and reports
+// whether it is hovered: row actions show while hovered or selected.
+// Selection wins over hover.
+func rowTint(row ui.Element, t *ui.Theme, selected bool) bool {
+	hovered := row.Hovered()
+	switch {
+	case selected:
+		row.Background(t.Background)
+	case hovered:
+		row.Background(t.SurfaceHover)
+	}
+	return hovered
 }
 
 // segmentedEnum binds a named int enum to a segmented control and reports
@@ -362,8 +537,9 @@ func pathLabel(path, orig string) string {
 	return path
 }
 
-func (a *App) filterInput(c *ui.Context, value *string, placeholder string) {
-	ui.TextInput(c, value).FillWidth().Height(26).FontSize(11).PaddingX(8).
+// filterInput is the small search field the side panels and the popover share.
+func (a *App) filterInput(c *ui.Context, value *string, placeholder string) ui.Element {
+	return ui.TextInput(c, value).FillWidth().Height(26).FontSize(11).PaddingX(8).
 		Placeholder(placeholder)
 }
 

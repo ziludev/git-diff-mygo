@@ -2,6 +2,7 @@ package shell
 
 import (
 	"hash/fnv"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -66,38 +67,147 @@ func (a *App) historyView(c *ui.Context, p palette) {
 		return
 	}
 
-	rows := a.historyRows()
-	ui.List(c, &a.historyList, len(rows), func(i int) {
-		r := rows[i]
-		if r.more {
-			ui.Row(c).FillWidth().Height(36).Center().Children(func() {
-				btn := ui.Button(c, "Load older commits").Height(24).FontSize(11).
-					Disabled(a.loadingCommits)
-				btn.OnClick(func() { a.loadCommits(true) })
-			})
+	// The filter narrows the pages already loaded; "Load older commits" still
+	// adds the next page, which the filter narrows as it arrives.
+	needle := filterNeedle(a.commitFilter)
+	matches := a.historyRows(needle)
+	ui.Column(c).FillHeight().FillWidth().Children(func() {
+		ui.Row(c).FillWidth().Shrink(0).PaddingX(8).PaddingY(6).Gap(6).Children(func() {
+			a.takeFilterFocus(ViewHistory, a.filterInput(c, &a.commitFilter, "Filter commits"))
+			a.authorButton(c)
+		})
+		if len(matches) == 0 {
+			// No loaded commit matches; the next page may still hold one, so
+			// the button stays reachable from here.
+			detail, label := "", ""
+			var run func()
+			if a.hasMoreCommits {
+				label, detail = "Load older commits", "Older commits may still match."
+				run = func() { a.loadCommits(true) }
+			}
+			emptyState(c, "No matching commits", detail, label, run)
 			return
 		}
-		a.commitRow(c, p, *r.commit, r)
-	}).ItemKey(func(i int) any {
-		if i < len(rows) {
-			return rows[i].key
+		rows := matches
+		if a.hasMoreCommits {
+			// Copy before appending: matches is the cached slice, which must
+			// keep its own length.
+			rows = append(append([]historyRow(nil), rows...), historyRow{key: "more", more: true})
 		}
-		return i
+		ui.List(c, &a.historyList, len(rows), func(i int) {
+			r := rows[i]
+			if r.more {
+				ui.Row(c).FillWidth().Height(36).Center().Children(func() {
+					btn := ui.Button(c, "Load older commits").Height(24).FontSize(11).
+						Disabled(a.loadingCommits)
+					btn.OnClick(func() { a.loadCommits(true) })
+				})
+				return
+			}
+			a.commitRow(c, p, *r.commit, r)
+		}).ItemKey(func(i int) any {
+			return rows[i].key
+		}).Grow(1)
 	})
 }
 
-// historyRows flattens the commits and the footer into the rows a virtual list
-// builds. A commit's files are not rows: the right panel lists them.
-func (a *App) historyRows() []historyRow {
-	rows := make([]historyRow, 0, len(a.commits)+1)
+// authorButton opens the menu that keeps one author's commits. The authors
+// come from the pages loaded so far; the chosen one stays in the label even
+// when a reload no longer lists it, so the filter is never invisible.
+func (a *App) authorButton(c *ui.Context) {
+	label := "All authors"
+	if a.commitAuthor != "" {
+		label = a.commitAuthor
+	}
+	btn := ui.Button(c, label).Height(26).FontSize(11).Shrink(0)
+	btn.Tooltip("Show one author's commits")
+	btn.Menu(func(m *ui.Menu) {
+		if m.Item("All authors").Checked(a.commitAuthor == "").Chosen() {
+			a.commitAuthor = ""
+		}
+		m.Separator()
+		for _, name := range commitAuthors(a.commits) {
+			if m.Item(name).Checked(a.commitAuthor == name).Chosen() {
+				a.commitAuthor = name
+			}
+		}
+	})
+}
+
+// commitAuthors lists the distinct author names of commits, sorted. A commit
+// without a name is listed as the row shows it, "unknown".
+func commitAuthors(commits []gitx.Commit) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, commit := range commits {
+		name := authorName(commit)
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// authorName is the name a commit's row shows for its author.
+func authorName(commit gitx.Commit) string {
+	if commit.Author == "" {
+		return "unknown"
+	}
+	return commit.Author
+}
+
+// historyRowsCache holds the rows a filter produced, with the commit page,
+// author and needle they were built from. The list, the keyboard and the empty
+// state all ask for the same rows in one frame.
+type historyRowsCache struct {
+	rows    []historyRow
+	version uint64
+	author  string
+	needle  string
+	built   bool
+}
+
+// historyRows returns the commits that pass the filter, rebuilding them only
+// when the page, the author or the needle changed. The "load older" footer is
+// not a match, so the caller adds it to what the list draws.
+func (a *App) historyRows(needle string) []historyRow {
+	c := &a.historyCache
+	if c.built && c.version == a.commitsVersion && c.author == a.commitAuthor && c.needle == needle {
+		return c.rows
+	}
+	rows := make([]historyRow, 0, len(a.commits))
 	for i := range a.commits {
 		commit := &a.commits[i]
+		if a.commitAuthor != "" && authorName(*commit) != a.commitAuthor {
+			continue
+		}
+		if !commitMatches(needle, commit) {
+			continue
+		}
 		rows = append(rows, historyRow{key: "c:" + commit.OID, index: i, commit: commit})
 	}
-	if a.hasMoreCommits {
-		rows = append(rows, historyRow{key: "more", more: true})
-	}
+	*c = historyRowsCache{rows: rows, version: a.commitsVersion, author: a.commitAuthor, needle: needle, built: true}
 	return rows
+}
+
+// commitMatches reports whether a commit passes the history filter: its
+// subject, author, hash or one of its ref names contains the needle.
+func commitMatches(needle string, commit *gitx.Commit) bool {
+	if needle == "" {
+		return true
+	}
+	if nameMatches(needle, commit.Subject) || nameMatches(needle, commit.Author) ||
+		nameMatches(needle, commit.Short) || nameMatches(needle, commit.OID) {
+		return true
+	}
+	for _, ref := range commit.Refs {
+		if nameMatches(needle, ref.Name) {
+			return true
+		}
+	}
+	return false
 }
 
 // commitRow draws one commit as a single line of columns: the author's avatar,
@@ -119,12 +229,10 @@ func (a *App) commitRow(c *ui.Context, p palette, commit gitx.Commit, r historyR
 		subject = "(no message)"
 	}
 	row.OnClick(func() { a.selectCommit(commit) })
+	row.ContextMenu(func(m *ui.Menu) { a.commitMenu(c, m, commit) })
 	row.Children(func() {
 		a.commitAvatar(c, commit.Author)
-		author := commit.Author
-		if author == "" {
-			author = "unknown"
-		}
+		author := authorName(commit)
 		ui.Text(c, author).FontSize(10).TextColor(t.TextMuted).
 			Width(historyAuthorWidth).SingleLine().Tooltip(commit.Author)
 		ui.Text(c, relativeTime(commit.Time)).FontSize(10).TextColor(t.TextMuted).

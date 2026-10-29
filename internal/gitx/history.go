@@ -14,6 +14,9 @@ const (
 	defaultLogLimit = 100
 	// maxLogLimit bounds what the page may ask for in one call.
 	maxLogLimit = 500
+	// logFormat is the record format the history page and the outgoing list
+	// parse: oid, short id, author, author time, parents and subject.
+	logFormat = "--format=%H%x1f%h%x1f%an%x1f%at%x1f%P%x1f%s%x00"
 )
 
 // Ref is a branch, remote branch or tag pointing at a commit. Kind is one of
@@ -80,7 +83,7 @@ func (r *Runner) Log(ctx context.Context, req LogRequest) ([]Commit, error) {
 	// merge itself and lanes run backwards.
 	out, err := r.Run(ctx, "log", "--all", "--no-color", "--no-show-signature", "--topo-order",
 		"--max-count="+strconv.Itoa(limit), "--skip="+strconv.Itoa(skip),
-		"--format=%H%x1f%h%x1f%an%x1f%at%x1f%P%x1f%s%x00", "--")
+		logFormat, "--")
 	if err != nil {
 		// "HEAD does not have any commits yet" (or no refs at all): an empty
 		// history, not a failure.

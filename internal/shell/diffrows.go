@@ -206,7 +206,7 @@ func buildDiffRows(p patchFile, layout diffLayout, gaps map[int]*diffGap) []diff
 // and history selections onto patches, so the header, the rows and the gap
 // reads cannot disagree.
 func (a *App) diffSource() (id diffSourceID, req gitx.FileTextRequest, ok bool) {
-	if a.view == ViewHistory {
+	if a.showsCommitPanel() {
 		if a.selectedCommit == nil || a.commitFile == nil {
 			return diffSourceID{}, gitx.FileTextRequest{}, false
 		}
